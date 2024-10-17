@@ -1,0 +1,735 @@
+Bien sûr ! Je vais vous fournir un exemple de log pour chaque type d'audit mentionné précédemment. Ces exemples illustrent comment chaque type apparaît dans le fichier `/var/log/audit/audit.log`. Les valeurs sont générées à des fins d'illustration et ne contiennent pas de données réelles.
+
+---
+
+### **1. SYSCALL**
+
+**Description :** Enregistre les appels système effectués par les processus.
+
+**Exemple de log :**
+
+```
+type=SYSCALL msg=audit(1629111224.123:4567): arch=c000003e syscall=59 success=yes exit=0 a0=7ffd5c6a1b68 a1=7ffd5c6a1b70 a2=7ffd5c6a1b80 a3=0 items=2 ppid=1234 pid=5678 auid=1000 uid=1000 gid=1000 euid=1000 suid=1000 fsuid=1000 egid=1000 sgid=1000 fsgid=1000 tty=pts0 ses=2 comm="ls" exe="/usr/bin/ls" key="exec_cmd"
+```
+
+---
+
+### **2. EXECVE**
+
+**Description :** Indique qu'un nouveau processus a été créé via l'appel système `execve`.
+
+**Exemple de log :**
+
+```
+type=EXECVE msg=audit(1629111224.123:4568): argc=2 a0="ls" a1="-l"
+```
+
+---
+
+### **3. CWD**
+
+**Description :** Current Working Directory. Indique le répertoire de travail courant du processus.
+
+**Exemple de log :**
+
+```
+type=CWD msg=audit(1629111224.123:4569):  cwd="/home/user"
+```
+
+---
+
+### **4. PATH**
+
+**Description :** Fournit le chemin du fichier impliqué dans l'événement.
+
+**Exemple de log :**
+
+```
+type=PATH msg=audit(1629111224.123:4570): item=0 name="/usr/bin/ls" inode=131072 dev=08:01 mode=0100755 ouid=0 ogid=0 rdev=00:00 objtype=NORMAL
+```
+
+---
+
+### **5. SOCKADDR**
+
+**Description :** Contient des informations sur les adresses réseau lors d'événements liés au réseau.
+
+**Exemple de log :**
+
+```
+type=SOCKADDR msg=audit(1629111224.123:4571): saddr=0200FFFF7F0000010000000000000000
+```
+
+---
+
+### **6. SOCKETCALL**
+
+**Description :** Enregistre les appels aux fonctions de socket réseau.
+
+**Exemple de log :**
+
+```
+type=SOCKETCALL msg=audit(1629111224.123:4572): nargs=3 a0=3 a1=7ffd5c6a1b50 a2=16
+```
+
+---
+
+### **7. NETFILTER_PKT**
+
+**Description :** Capture les paquets réseau filtrés par Netfilter.
+
+**Exemple de log :**
+
+```
+type=NETFILTER_PKT msg=audit(1629111224.123:4573): physin=eth0 physout= mac=00:0c:29:68:22:5b src=192.168.1.10 dst=192.168.1.1 proto=TCP spt=54321 dpt=80
+```
+
+---
+
+### **8. USER_LOGIN**
+
+**Description :** Tentative de connexion utilisateur.
+
+**Exemple de log :**
+
+```
+type=USER_LOGIN msg=audit(1629111224.123:4574): pid=1234 uid=0 auid=4294967295 ses=4294967295 msg='op=login acct="user" exe="/usr/sbin/sshd" hostname=192.168.1.100 addr=192.168.1.100 terminal=/dev/pts/0 res=success'
+```
+
+---
+
+### **9. USER_LOGOUT**
+
+**Description :** Déconnexion de l'utilisateur.
+
+**Exemple de log :**
+
+```
+type=USER_LOGOUT msg=audit(1629111224.123:4575): pid=1234 uid=0 auid=1000 ses=2 msg='op=logout acct="user" exe="/usr/bin/bash" hostname=? addr=? terminal=pts/0 res=success'
+```
+
+---
+
+### **10. USER_START**
+
+**Description :** Début d'une session utilisateur.
+
+**Exemple de log :**
+
+```
+type=USER_START msg=audit(1629111224.123:4576): pid=5678 uid=0 auid=1000 ses=2 msg='op=PAM:session_open acct="user" exe="/usr/bin/sudo" hostname=? addr=? terminal=/dev/pts/0 res=success'
+```
+
+---
+
+### **11. USER_END**
+
+**Description :** Fin d'une session utilisateur.
+
+**Exemple de log :**
+
+```
+type=USER_END msg=audit(1629111224.123:4577): pid=5678 uid=0 auid=1000 ses=2 msg='op=PAM:session_close acct="user" exe="/usr/bin/sudo" hostname=? addr=? terminal=/dev/pts/0 res=success'
+```
+
+---
+
+### **12. USER_ACCT**
+
+**Description :** Événements liés à la gestion des comptes utilisateurs.
+
+**Exemple de log :**
+
+```
+type=USER_ACCT msg=audit(1629111224.123:4578): pid=5678 uid=1000 auid=1000 ses=2 msg='op=PAM:accounting acct="user" exe="/usr/bin/sudo" hostname=? addr=? terminal=/dev/pts/0 res=success'
+```
+
+---
+
+### **13. USER_CMD**
+
+**Description :** Commande exécutée par un utilisateur via `sudo`.
+
+**Exemple de log :**
+
+```
+type=USER_CMD msg=audit(1629111224.123:4579): pid=5678 uid=1000 auid=1000 ses=2 msg='cwd="/home/user" cmd="apt-get update" exe="/usr/bin/sudo" terminal=pts/0 res=success'
+```
+
+---
+
+### **14. USER_AUTH**
+
+**Description :** Événements d'authentification utilisateur.
+
+**Exemple de log :**
+
+```
+type=USER_AUTH msg=audit(1629111224.123:4580): pid=1234 uid=0 auid=4294967295 ses=4294967295 msg='op=PAM:authentication acct="user" exe="/usr/sbin/sshd" hostname=192.168.1.100 addr=192.168.1.100 terminal=ssh res=success'
+```
+
+---
+
+### **15. CRED_ACQ**
+
+**Description :** Acquisition de nouvelles informations d'identification.
+
+**Exemple de log :**
+
+```
+type=CRED_ACQ msg=audit(1629111224.123:4581): pid=1234 uid=0 auid=1000 ses=2 msg='op=PAM:setcred acct="user" exe="/usr/bin/sudo" hostname=? addr=? terminal=/dev/pts/0 res=success'
+```
+
+---
+
+### **16. CRED_DISP**
+
+**Description :** Dispersion (libération) des informations d'identification.
+
+**Exemple de log :**
+
+```
+type=CRED_DISP msg=audit(1629111224.123:4582): pid=1234 uid=0 auid=1000 ses=2 msg='op=PAM:setcred acct="user" exe="/usr/bin/sudo" hostname=? addr=? terminal=/dev/pts/0 res=success'
+```
+
+---
+
+### **17. CRED_REFR**
+
+**Description :** Actualisation des informations d'identification.
+
+**Exemple de log :**
+
+```
+type=CRED_REFR msg=audit(1629111224.123:4583): pid=1234 uid=0 auid=1000 ses=2 msg='op=PAM:setcred acct="user" exe="/usr/bin/sudo" hostname=? addr=? terminal=/dev/pts/0 res=success'
+```
+
+---
+
+### **18. DAEMON_START**
+
+**Description :** Démarrage du démon d'audit (`auditd`).
+
+**Exemple de log :**
+
+```
+type=DAEMON_START msg=audit(1629111224.123:4584): op=start ver=2.8.5 format=raw kernel=5.4.0-89-generic auid=4294967295 pid=1234 uid=0 res=success
+```
+
+---
+
+### **19. DAEMON_END**
+
+**Description :** Arrêt du démon d'audit.
+
+**Exemple de log :**
+
+```
+type=DAEMON_END msg=audit(1629111224.123:4585): op=terminate auid=4294967295 pid=1234 uid=0 res=success
+```
+
+---
+
+### **20. CONFIG_CHANGE**
+
+**Description :** Modifications de la configuration du système d'audit.
+
+**Exemple de log :**
+
+```
+type=CONFIG_CHANGE msg=audit(1629111224.123:4586): auid=1000 ses=2 op="add rule" key="watch_passwd" list=4 res=1
+```
+
+---
+
+### **21. SERVICE_START**
+
+**Description :** Démarrage d'un service système.
+
+**Exemple de log :**
+
+```
+type=SERVICE_START msg=audit(1629111224.123:4587): pid=1 uid=0 auid=4294967295 ses=4294967295 msg='unit=ssh.service exe="/usr/lib/systemd/systemd" hostname=? addr=? terminal=? res=success'
+```
+
+---
+
+### **22. SERVICE_STOP**
+
+**Description :** Arrêt d'un service système.
+
+**Exemple de log :**
+
+```
+type=SERVICE_STOP msg=audit(1629111224.123:4588): pid=1 uid=0 auid=4294967295 ses=4294967295 msg='unit=ssh.service exe="/usr/lib/systemd/systemd" hostname=? addr=? terminal=? res=success'
+```
+
+---
+
+### **23. MAC_POLICY_LOAD**
+
+**Description :** Chargement d'une politique MAC (par exemple, SELinux).
+
+**Exemple de log :**
+
+```
+type=MAC_POLICY_LOAD msg=audit(1629111224.123:4589): auid=0 ses=0 lsm=selinux res=success
+```
+
+---
+
+### **24. MAC_STATUS**
+
+**Description :** Changements d'état de la politique MAC.
+
+**Exemple de log :**
+
+```
+type=MAC_STATUS msg=audit(1629111224.123:4590): auid=0 ses=0 lsm=selinux enforcing=1 old_enforcing=0 res=success
+```
+
+---
+
+### **25. AVC**
+
+**Description :** Événements générés par SELinux lorsqu'une action est autorisée ou refusée.
+
+**Exemple de log :**
+
+```
+type=AVC msg=audit(1629111224.123:4591): avc:  denied  { read } for  pid=5678 comm="httpd" name="secret.txt" dev="sda1" ino=131073 scontext=system_u:system_r:httpd_t:s0 tcontext=unconfined_u:object_r:user_home_t:s0 tclass=file
+```
+
+---
+
+### **26. USER_AVC**
+
+**Description :** Événements AVC déclenchés par des actions utilisateur.
+
+**Exemple de log :**
+
+```
+type=USER_AVC msg=audit(1629111224.123:4592): pid=5678 uid=1000 auid=1000 ses=2 msg='avc:  denied  { write } for  pid=5678 comm="vim" name="config.conf" dev="sda1" ino=131074 scontext=unconfined_u:unconfined_r:unconfined_t:s0 tcontext=system_u:object_r:etc_t:s0 tclass=file res=failed'
+```
+
+---
+
+### **27. ANOM_PROMISCUOUS**
+
+**Description :** Détection d'une interface réseau en mode promiscuité.
+
+**Exemple de log :**
+
+```
+type=ANOM_PROMISCUOUS msg=audit(1629111224.123:4593): dev=eth0 prom=1 old_prom=0 auid=1000 uid=0 gid=0 ses=2
+```
+
+---
+
+### **28. ANOM_ABEND**
+
+**Description :** Détection d'une fin anormale d'un processus (crash).
+
+**Exemple de log :**
+
+```
+type=ANOM_ABEND msg=audit(1629111224.123:4594): auid=1000 uid=1000 gid=1000 ses=2 pid=5678 comm="myapp" reason="memory violation" sig=11
+```
+
+---
+
+### **29. ANOM_LINK**
+
+**Description :** Détection de liens symboliques suspects.
+
+**Exemple de log :**
+
+```
+type=ANOM_LINK msg=audit(1629111224.123:4595): operation="symlink" dir="/tmp" filename="suspicious_link" auid=1000 uid=1000 gid=1000 ses=2 res=failed
+```
+
+---
+
+### **30. INTEGRITY_RULE**
+
+**Description :** Événements liés aux règles d'intégrité du système.
+
+**Exemple de log :**
+
+```
+type=INTEGRITY_RULE msg=audit(1629111224.123:4596): integrity_check=failed file="/etc/passwd" hash="abc123..." expected_hash="def456..."
+```
+
+---
+
+### **31. FS_WATCH**
+
+**Description :** Surveillance des événements sur le système de fichiers.
+
+**Exemple de log :**
+
+```
+type=FS_WATCH msg=audit(1629111224.123:4597): pid=5678 uid=1000 auid=1000 ses=2 path="/var/www/html/index.html" perm=wa
+```
+
+---
+
+### **32. FILE_CREATE**
+
+**Description :** Création de fichiers.
+
+**Exemple de log :**
+
+```
+type=FILE_CREATE msg=audit(1629111224.123:4598): pid=5678 uid=1000 auid=1000 ses=2 name="newfile.txt" inode=131075 dev=08:01 mode=0100644 ouid=1000 ogid=1000
+```
+
+---
+
+### **33. FILE_DELETE**
+
+**Description :** Suppression de fichiers.
+
+**Exemple de log :**
+
+```
+type=FILE_DELETE msg=audit(1629111224.123:4599): pid=5678 uid=1000 auid=1000 ses=2 name="oldfile.txt" inode=131076 dev=08:01 ouid=1000 ogid=1000
+```
+
+---
+
+### **34. FILE_MOUNT**
+
+**Description :** Montage ou démontage de systèmes de fichiers.
+
+**Exemple de log :**
+
+```
+type=FILE_MOUNT msg=audit(1629111224.123:4600): pid=1234 uid=0 auid=1000 ses=2 op=mount fstype="nfs" src="server:/export" dest="/mnt/nfs"
+```
+
+---
+
+### **35. KERNEL_OTHER**
+
+**Description :** Autres événements générés par le noyau non classés ailleurs.
+
+**Exemple de log :**
+
+```
+type=KERNEL_OTHER msg=audit(1629111224.123:4601): information="some kernel event information"
+```
+
+---
+
+### **36. OBJ_PID**
+
+**Description :** Événements liés à des objets de processus.
+
+**Exemple de log :**
+
+```
+type=OBJ_PID msg=audit(1629111224.123:4602): op=signal_send pid=1234 target_pid=5678 sig=9 res=success
+```
+
+---
+
+### **37. CRYPTO_KEY_USER**
+
+**Description :** Opérations liées aux clés cryptographiques utilisateur.
+
+**Exemple de log :**
+
+```
+type=CRYPTO_KEY_USER msg=audit(1629111224.123:4603): pid=1234 uid=0 auid=1000 ses=2 op=add keyid=1234567890 res=success
+```
+
+---
+
+### **38. CRYPTO_KEY_KERNEL**
+
+**Description :** Opérations liées aux clés cryptographiques du noyau.
+
+**Exemple de log :**
+
+```
+type=CRYPTO_KEY_KERNEL msg=audit(1629111224.123:4604): op=destroy keyid=1234567890 res=success
+```
+
+---
+
+### **39. SECCOMP**
+
+**Description :** Événements liés au filtrage des appels système avec Seccomp.
+
+**Exemple de log :**
+
+```
+type=SECCOMP msg=audit(1629111224.123:4605): auid=1000 uid=1000 gid=1000 ses=2 pid=5678 comm="sandboxed_app" exe="/usr/bin/sandboxed_app" sig=31 arch=c000003e syscall=59 compat=0 ip=0x7f6c12345678 code=0x0
+```
+
+---
+
+### **40. PROCTITLE**
+
+**Description :** Titre du processus, souvent utilisé pour donner le contexte lors d'événements liés aux processus.
+
+**Exemple de log :**
+
+```
+type=PROCTITLE msg=audit(1629111224.123:4606): proctitle=2F7573722F62696E2F6C73
+```
+
+*(Le proctitle est généralement encodé en hexadécimal.)*
+
+---
+
+### **41. TTY**
+
+**Description :** Enregistre les entrées/sorties des terminaux (tty), si configuré.
+
+**Exemple de log :**
+
+```
+type=TTY msg=audit(1629111224.123:4607): tty=pts0 uid=1000 auid=1000 ses=2 msg='data="ls -la\n"'
+```
+
+---
+
+### **42. TRUSTED_APP**
+
+**Description :** Événements liés aux applications de confiance.
+
+**Exemple de log :**
+
+```
+type=TRUSTED_APP msg=audit(1629111224.123:4608): pid=5678 uid=1000 auid=1000 ses=2 appid="trusted_app" action="access_granted" res=success
+```
+
+---
+
+### **43. SYSTEM_BOOT**
+
+**Description :** Démarrage du système.
+
+**Exemple de log :**
+
+```
+type=SYSTEM_BOOT msg=audit(1629111224.123:4609): pid=1 uid=0 auid=4294967295 ses=4294967295 msg='op=system_boot ver=2.8.5 format=raw kernel=5.4.0-89-generic res=success'
+```
+
+---
+
+### **44. SYSTEM_SHUTDOWN**
+
+**Description :** Arrêt du système.
+
+**Exemple de log :**
+
+```
+type=SYSTEM_SHUTDOWN msg=audit(1629111224.123:4610): pid=1 uid=0 auid=4294967295 ses=4294967295 msg='op=system_shutdown ver=2.8.5 format=raw kernel=5.4.0-89-generic res=success'
+```
+
+---
+
+### **45. CLOCK_SET**
+
+**Description :** Modification de l'horloge système.
+
+**Exemple de log :**
+
+```
+type=CLOCK_SET msg=audit(1629111224.123:4611): auid=0 ses=1 old-time=1629111224 new-time=1629114824
+```
+
+---
+
+### **46. KERNEL_SERVICE**
+
+**Description :** Événements liés aux services du noyau.
+
+**Exemple de log :**
+
+```
+type=KERNEL_SERVICE msg=audit(1629111224.123:4612): op="module_load" module="nf_conntrack" pid=1234 uid=0 res=success
+```
+
+---
+
+### **47. LOGIN**
+
+**Description :** Tentatives de connexion, réussies ou échouées.
+
+**Exemple de log :**
+
+```
+type=LOGIN msg=audit(1629111224.123:4613): pid=1234 uid=0 old-auid=4294967295 new-auid=1000 old-ses=4294967295 new-ses=2
+```
+
+---
+
+### **48. CHUSER_ID**
+
+**Description :** Changement d'identifiant utilisateur.
+
+**Exemple de log :**
+
+```
+type=CHUSER_ID msg=audit(1629111224.123:4614): pid=5678 uid=1000 auid=1000 ses=2 old-uid=1000 new-uid=0
+```
+
+---
+
+### **49. OPEN**
+
+**Description :** Ouverture de fichiers ou de ressources.
+
+**Exemple de log :**
+
+```
+type=OPEN msg=audit(1629111224.123:4615): pid=5678 uid=1000 auid=1000 ses=2 file="/etc/passwd" flags="O_RDONLY" perms=rw-r--r-- res=success
+```
+
+---
+
+### **50. ACCESS**
+
+**Description :** Tentatives d'accès à des fichiers ou ressources.
+
+**Exemple de log :**
+
+```
+type=ACCESS msg=audit(1629111224.123:4616): pid=5678 uid=1000 auid=1000 ses=2 file="/root/secret.txt" res=failed
+```
+
+---
+
+### **51. IPC**
+
+**Description :** Événements liés à la communication inter-processus.
+
+**Exemple de log :**
+
+```
+type=IPC msg=audit(1629111224.123:4617): pid=5678 uid=1000 auid=1000 ses=2 ipc_type=SEM ipc_id=123 perms="0600" res=success
+```
+
+---
+
+### **52. MQ_OPEN**
+
+**Description :** Événements liés à l'ouverture de files de messages.
+
+**Exemple de log :**
+
+```
+type=MQ_OPEN msg=audit(1629111224.123:4618): pid=5678 uid=1000 auid=1000 ses=2 name="/my_queue" flags="O_CREAT|O_RDWR" mode="0600" res=success
+```
+
+---
+
+### **53. MQ_SEND**
+
+**Description :** Envoi de messages dans une file de messages.
+
+**Exemple de log :**
+
+```
+type=MQ_SEND msg=audit(1629111224.123:4619): pid=5678 uid=1000 auid=1000 ses=2 mqstat="..." res=success
+```
+
+---
+
+### **54. MQ_RECEIVE**
+
+**Description :** Réception de messages depuis une file de messages.
+
+**Exemple de log :**
+
+```
+type=MQ_RECEIVE msg=audit(1629111224.123:4620): pid=5678 uid=1000 auid=1000 ses=2 mqstat="..." res=success
+```
+
+---
+
+### **55. CONNECT**
+
+**Description :** Événements liés aux connexions réseau.
+
+**Exemple de log :**
+
+```
+type=CONNECT msg=audit(1629111224.123:4621): pid=5678 uid=1000 auid=1000 ses=2 addr=192.168.1.1 port=80 res=success
+```
+
+---
+
+### **56. CHROOT**
+
+**Description :** Utilisation de l'appel système `chroot`.
+
+**Exemple de log :**
+
+```
+type=CHROOT msg=audit(1629111224.123:4622): pid=5678 uid=0 auid=1000 ses=2 newroot="/var/chroot/jail" res=success
+```
+
+---
+
+### **57. MOUNT**
+
+**Description :** Montage de systèmes de fichiers.
+
+**Exemple de log :**
+
+```
+type=MOUNT msg=audit(1629111224.123:4623): pid=1234 uid=0 auid=1000 ses=2 op=mount fstype="ext4" src="/dev/sdb1" dest="/mnt/usb" res=success
+```
+
+---
+
+### **58. UMOUNT**
+
+**Description :** Démontage de systèmes de fichiers.
+
+**Exemple de log :**
+
+```
+type=UMOUNT msg=audit(1629111224.123:4624): pid=1234 uid=0 auid=1000 ses=2 op=umount target="/mnt/usb" res=success
+```
+
+---
+
+### **59. KERNEL_OTHER**
+
+**Description :** Événements divers générés par le noyau.
+
+**Exemple de log :**
+
+```
+type=KERNEL_OTHER msg=audit(1629111224.123:4625): info="kernel event not classified"
+```
+
+---
+
+### **60. PROCTITLE**
+
+**Description :** Titre du processus, souvent utilisé pour donner le contexte lors d'événements liés aux processus.
+
+**Exemple de log :**
+
+```
+type=PROCTITLE msg=audit(1629111224.123:4626): proctitle="python3 myscript.py"
+```
+
+---
+
+**Remarque :** Certains types d'événements peuvent ne pas être générés par défaut et nécessitent une configuration spécifique du système d'audit pour être enregistrés.
+
+---
+
+### **Conclusion :**
+
+Ces exemples illustrent comment les différents types d'événements apparaissent dans le fichier `/var/log/audit/audit.log`. Ils vous aideront à comprendre le format des logs d'audit et à configurer vos outils d'analyse pour extraire les informations pertinentes.
+
+Si vous avez besoin d'aide supplémentaire pour interpréter ces logs ou pour configurer votre système d'audit, n'hésitez pas à me le faire savoir !
