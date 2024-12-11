@@ -1,0 +1,209 @@
+inputs:
+  - id: httpjson-bitwarden
+    type: httpjson
+    streams:
+      - id: httpjson-bitwarden.collection
+        data_stream:
+          dataset: bitwarden.collection
+          type: logs
+        config_version: 2
+        interval: 1h
+        request.method: GET
+        request.url: 'https://api.bitwarden.com/public/collections'
+        request.ssl: null
+        request.timeout: 30s
+        auth.oauth2:
+          client.id: null
+          client.secret: null
+          token_url: 'https://identity.bitwarden.com/connect/token'
+          scopes: api.organization
+          endpoint_params:
+            grant_type: client_credentials
+        request.rate_limit:
+          reset: >-
+            [[ add (toInt (.last_response.header.Get "Retry-After"))
+            ((now).Unix) ]]
+          remaining: '0'
+        response.pagination:
+          - set:
+              target: url.params.continuationToken
+              value: >-
+                [[if index .last_response.body
+                "continuationToken"]][[.last_response.body.continuationToken]][[end]]
+              fail_on_template_error: true
+        response.split:
+          target: body.data
+          ignore_empty_value: true
+        tags:
+          - forwarded
+          - bitwarden-collection
+        publisher_pipeline.disable_host: true
+      - id: httpjson-bitwarden.event
+        data_stream:
+          dataset: bitwarden.event
+          type: logs
+        config_version: 2
+        interval: 5m
+        request.method: GET
+        request.url: 'https://api.bitwarden.com/public/events'
+        request.ssl: null
+        request.timeout: 30s
+        auth.oauth2:
+          client.id: null
+          client.secret: null
+          token_url: 'https://identity.bitwarden.com/connect/token'
+          scopes: api.organization
+          endpoint_params:
+            grant_type: client_credentials
+        request.rate_limit:
+          reset: >-
+            [[ add (toInt (.last_response.header.Get "Retry-After"))
+            ((now).Unix) ]]
+          remaining: '0'
+        request.transforms:
+          - set:
+              target: url.params.start
+              value: >-
+                [[formatDate (parseDate .cursor.last_update_at)
+                "2006-01-02T15:04:05.999Z"]]
+              default: >-
+                [[formatDate (now (parseDuration "-24h"))
+                "2006-01-02T15:04:05.999Z"]]
+          - set:
+              target: url.params.end
+              value: '[[formatDate (now) "2006-01-02T15:04:05.999Z"]]'
+        response.pagination:
+          - set:
+              target: url.params.start
+              value: '[[.last_response.url.params.Get "start"]]'
+              fail_on_template_error: true
+          - set:
+              target: url.params.end
+              value: '[[.last_response.url.params.Get "end"]]'
+              fail_on_template_error: true
+          - set:
+              target: url.params.continuationToken
+              value: >-
+                [[if index .last_response.body
+                "continuationToken"]][[.last_response.body.continuationToken]][[end]]
+              fail_on_template_error: true
+        cursor:
+          last_update_at:
+            value: >-
+              [[if (eq .last_response.body.continuationToken
+              nil)]][[.first_event.date]][[end]]
+        response.split:
+          target: body.data
+          ignore_empty_value: true
+        tags:
+          - forwarded
+          - bitwarden-event
+        publisher_pipeline.disable_host: true
+      - id: httpjson-bitwarden.group
+        data_stream:
+          dataset: bitwarden.group
+          type: logs
+        config_version: 2
+        interval: 1h
+        request.method: GET
+        request.url: 'https://api.bitwarden.com/public/groups'
+        request.ssl: null
+        request.timeout: 30s
+        auth.oauth2:
+          client.id: null
+          client.secret: null
+          token_url: 'https://identity.bitwarden.com/connect/token'
+          scopes: api.organization
+          endpoint_params:
+            grant_type: client_credentials
+        request.rate_limit:
+          reset: >-
+            [[ add (toInt (.last_response.header.Get "Retry-After"))
+            ((now).Unix) ]]
+          remaining: '0'
+        response.pagination:
+          - set:
+              target: url.params.continuationToken
+              value: >-
+                [[if index .last_response.body
+                "continuationToken"]][[.last_response.body.continuationToken]][[end]]
+              fail_on_template_error: true
+        response.split:
+          target: body.data
+          ignore_empty_value: true
+        tags:
+          - forwarded
+          - bitwarden-group
+        publisher_pipeline.disable_host: true
+      - id: httpjson-bitwarden.member
+        data_stream:
+          dataset: bitwarden.member
+          type: logs
+        config_version: 2
+        interval: 1h
+        request.method: GET
+        request.url: 'https://api.bitwarden.com/public/members'
+        request.ssl: null
+        request.timeout: 30s
+        auth.oauth2:
+          client.id: null
+          client.secret: null
+          token_url: 'https://identity.bitwarden.com/connect/token'
+          scopes: api.organization
+          endpoint_params:
+            grant_type: client_credentials
+        request.rate_limit:
+          reset: >-
+            [[ add (toInt (.last_response.header.Get "Retry-After"))
+            ((now).Unix) ]]
+          remaining: '0'
+        response.pagination:
+          - set:
+              target: url.params.continuationToken
+              value: >-
+                [[if index .last_response.body
+                "continuationToken"]][[.last_response.body.continuationToken]][[end]]
+              fail_on_template_error: true
+        response.split:
+          target: body.data
+          ignore_empty_value: true
+        tags:
+          - forwarded
+          - bitwarden-member
+        publisher_pipeline.disable_host: true
+      - id: httpjson-bitwarden.policy
+        data_stream:
+          dataset: bitwarden.policy
+          type: logs
+        config_version: 2
+        interval: 1h
+        request.method: GET
+        request.url: 'https://api.bitwarden.com/public/policies'
+        request.ssl: null
+        request.timeout: 30s
+        auth.oauth2:
+          client.id: null
+          client.secret: null
+          token_url: 'https://identity.bitwarden.com/connect/token'
+          scopes: api.organization
+          endpoint_params:
+            grant_type: client_credentials
+        request.rate_limit:
+          reset: >-
+            [[ add (toInt (.last_response.header.Get "Retry-After"))
+            ((now).Unix) ]]
+          remaining: '0'
+        response.pagination:
+          - set:
+              target: url.params.continuationToken
+              value: >-
+                [[if index .last_response.body
+                "continuationToken"]][[.last_response.body.continuationToken]][[end]]
+              fail_on_template_error: true
+        response.split:
+          target: body.data
+          ignore_empty_value: true
+        tags:
+          - forwarded
+          - bitwarden-policy
+        publisher_pipeline.disable_host: true
