@@ -1,0 +1,46 @@
+filebeat.inputs:
+  - id: httpjson-bitwarden
+    type: httpjson
+    streams:
+      - id: httpjson-bitwarden.events
+        data_stream:
+          dataset: bitwarden.events
+          type: logs
+        config_version: 2
+        interval: 5m
+        request.method: GET
+        request.url: 'https://api.bitwarden.com/public/events'
+        request.timeout: 30s
+        auth.oauth2:
+          client.id: '<your_client_id>'
+          client.secret: '<your_client_secret>'
+          token_url: 'https://identity.bitwarden.com/connect/token'
+          scopes: api.organization
+          endpoint_params:
+            grant_type: client_credentials
+        request.transforms:
+          - set:
+              target: url.params.start
+              value: >-
+                [[formatDate (parseDate .cursor.last_update_at)
+                "2006-01-02T15:04:05.999Z"]]
+              default: >-
+                [[formatDate (now (parseDuration "-24h"))
+                "2006-01-02T15:04:05.999Z"]]
+          - set:
+              target: url.params.end
+              value: '[[formatDate (now) "2006-01-02T15:04:05.999Z"]]'
+        cursor:
+          last_update_at:
+            value: >-
+              [[if (eq .last_response.body.continuationToken
+              nil)]][[.first_event.date]][[end]]
+        response.pagination:
+          - set:
+              target: url.params.continuationToken
+              value: >-
+                [[.last_response.body.continuationToken]]
+              fail_on_template_error: true
+        response.split:
+          target: body.data
+          ignore_empty_value: true
