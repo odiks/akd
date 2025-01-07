@@ -1,3 +1,66 @@
+--//
+new cursor
+
+filebeat.inputs:
+  - id: httpjson-bitwarden
+    type: httpjson
+    streams:
+      - id: httpjson-bitwarden.events
+        data_stream:
+          dataset: bitwarden.events
+          type: logs
+        interval: 5m
+        request.method: GET
+        request.url: 'https://api.bitwarden.com/public/events'
+        request.timeout: 30s
+        auth.oauth2:
+          client.id: '<your_client_id>'
+          client.secret: '<your_client_secret>'
+          token_url: 'https://identity.bitwarden.com/connect/token'
+          scopes: api.organization
+          endpoint_params:
+            grant_type: client_credentials
+        cursor:
+          last_update_at:
+            value: >-
+              [[if eq .last_response.body.continuationToken nil]]
+                [[null]]
+              [[else]]
+                [[.first_event.date]]
+              [[end]]
+        request.transforms:
+          - set:
+              target: url.params.start
+              value: >-
+                [[formatDate (parseDate .cursor.last_update_at) "2006-01-02T15:04:05.999Z"]]
+              default: >-
+                [[formatDate (now (parseDuration "-24h")) "2006-01-02T15:04:05.999Z"]]
+          - set:
+              target: url.params.end
+              value: '[[formatDate (now) "2006-01-02T15:04:05.999Z"]]'
+        response.pagination:
+          - set:
+              target: url.params.continuationToken
+              value: >-
+                [[if eq .last_response.body.continuationToken nil]]
+                  [[fail "No new data"]]
+                [[else]]
+                  [[.last_response.body.continuationToken]]
+                [[end]]
+              fail_on_template_error: true
+        response.split:
+          target: body.data
+          ignore_empty_value: true
+          keep_empty_value: false  # Ignore les réponses vides
+        tags:
+          - bitwarden-events
+        publisher_pipeline.disable_host: true
+
+
+
+--/
+
+
 
 response.pagination:
   - set:
