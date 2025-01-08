@@ -1,3 +1,141 @@
+filebeat.inputs:
+  - type: httpjson
+    id: httpjson-bitwarden-date
+    name: "Bitwarden Events - Dates"
+    data_stream:
+      dataset: bitwarden.event
+      type: logs
+
+    # Intervale de collecte
+    schedule:
+      interval: 5m
+
+    # Requête initiale
+    request.method: GET
+    request.url: "https://api.bitwarden.com/public/events"
+    request.timeout: 30s
+
+    # (Optionnel) Configuration OAuth2
+    auth.oauth2:
+      client.id: "VOTRE_CLIENT_ID"
+      client.secret: "VOTRE_CLIENT_SECRET"
+      token_url: "https://identity.bitwarden.com/connect/token"
+      scopes: "api.organization"
+      endpoint_params:
+        grant_type: "client_credentials"
+
+    # Ici, on construit le paramètre 'start' et 'end' de l'API
+    request.transforms:
+      - set:
+          target: "url.params.start"
+          value: >-
+            [[ formatDate ( parseDate .cursor.last_update_at )
+               "2006-01-02T15:04:05.999Z" ]]
+          default: >-
+            # S'il n'y a pas encore de curseur, on initialise à "maintenant -24h"
+            [[ formatDate ( now ( parseDuration "-24h" ) )
+               "2006-01-02T15:04:05.999Z" ]]
+
+      - set:
+          target: "url.params.end"
+          value: '[[ formatDate ( now ) "2006-01-02T15:04:05.999Z" ]]'
+
+    # On split le tableau d'événements (si la réponse de l'API est dans body.data)
+    response.split:
+      target: "body.data"
+      ignore_empty_value: true
+
+    # Mise à jour du curseur à la fin de la requête
+    # On prend la date du dernier événement du tableau.
+    # On suppose que chaque événement possède un champ "timestamp" (ou "date").
+    cursor:
+      last_update_at:
+        value: >-
+          [[
+            if ( gt ( len .last_response.body.data ) 0 )
+            then
+              # Récupérer la date du dernier event (celui à l'index len-1)
+              index .last_response.body.data ( sub ( len .last_response.body.data ) 1 ).timestamp
+            else
+              # S'il n'y a pas d'événement, on reste sur la même date que le précédent curseur
+              .cursor.last_update_at
+            end
+          ]]
+
+    # (Optionnel) rate_limit si l'API gère un Retry-After
+    request.rate_limit:
+      reset: >-
+        [[ add ( toInt ( .last_response.header.Get "Retry-After" ) ) ( ( now ).Unix ) ]]
+      remaining: "0"
+
+    tags: ["forwarded", "bitwarden-event-date"]
+    publisher_pipeline.disable_host: true
+
+
+
+filebeat.inputs:
+  - type: httpjson
+    id: httpjson-bitwarden-ctoken
+    name: "Bitwarden Events - Continuation Token"
+    data_stream:
+      dataset: bitwarden.event
+      type: logs
+
+    schedule:
+      interval: 5m
+
+    request.method: GET
+    request.url: "https://api.bitwarden.com/public/events"
+    request.timeout: 30s
+
+    auth.oauth2:
+      client.id: "VOTRE_CLIENT_ID"
+      client.secret: "VOTRE_CLIENT_SECRET"
+      token_url: "https://identity.bitwarden.com/connect/token"
+      scopes: "api.organization"
+      endpoint_params:
+        grant_type: "client_credentials"
+
+    # 1) On réinjecte le token stocké dans le curseur (cursor.my_continuation)
+    #    dans l'URL (ou éventuellement un header, selon la doc Bitwarden).
+    request.transforms:
+      - set:
+          target: "url.params.continuationToken"
+          value: "[[ .cursor.my_continuation ]]"
+          default: ""
+
+    # 2) On parse la réponse et on split le tableau d'événements
+    response.split:
+      target: "body.data"
+      ignore_empty_value: true
+
+    # 3) On gère la pagination nativement via response.pagination
+    response.pagination:
+      - set:
+          target: "url.params.continuationToken"
+          value: >-
+            [[ if index .last_response.body "continuationToken" ]]
+            [[   .last_response.body.continuationToken ]]
+            [[ end ]]
+          fail_on_template_error: true
+
+    # 4) On stocke le nouveau continuationToken dans le curseur
+    #    pour le run suivant.
+    cursor:
+      my_continuation:
+        value: '[[ .last_response.body.continuationToken ]]'
+
+    # (Optionnel) Rate limit si Bitwarden renvoie un Retry-After
+    request.rate_limit:
+      reset: >-
+        [[ add ( toInt ( .last_response.header.Get "Retry-After" ) ) ( ( now ).Unix ) ]]
+      remaining: "0"
+
+    tags: ["forwarded", "bitwarden-event-ctoken"]
+    publisher_pipeline.disable_host: true
+
+
+
 filebeat:
   inputs:
     - id: httpjson-bitwarden
