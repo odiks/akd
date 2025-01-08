@@ -134,8 +134,123 @@ filebeat.inputs:
     tags: ["forwarded", "bitwarden-event-ctoken"]
     publisher_pipeline.disable_host: true
 
+-------
 
 
+- id: httpjson-bitwarden.event
+  data_stream:
+    dataset: bitwarden.event
+    type: logs
+
+  config_version: 2
+  interval: 5m
+
+  request.method: GET
+  request.url: 'https://api.bitwarden.com/public/events'
+  request.ssl: null
+  request.timeout: 30s
+
+  auth.oauth2:
+    client.id: null
+    client.secret: null
+    token_url: 'https://identity.bitwarden.com/connect/token'
+    scopes: api.organization
+    endpoint_params:
+      grant_type: client_credentials
+
+  # Exemple de gestion de rate-limit si Bitwarden retourne "Retry-After"
+  request.rate_limit:
+    reset: >-
+      [[ add (toInt (.last_response.header.Get "Retry-After"))
+      ((now).Unix) ]]
+    remaining: '0'
+
+  request.transforms:
+    # 1) Calculer la valeur du paramètre 'start'
+    - set:
+        target: url.params.start
+        value: >-
+          [[
+            // Si on a déjà un curseur (cursor.last_update_at), on l'utilise
+            // et on ajoute 1s pour éviter de reprendre le dernier event
+            if (not (eq .cursor.last_update_at nil))
+            then 
+              formatDate(
+                addDuration(
+                  parseDate .cursor.last_update_at
+                ) 
+                (parseDuration "1s")
+              )
+              "2006-01-02T15:04:05.999Z"
+            else
+              // Sinon, 1er run : on récupère les 24 dernières heures
+              formatDate(
+                now (parseDuration "-24h")
+              )
+              "2006-01-02T15:04:05.999Z"
+            end
+          ]]
+
+    # 2) Calculer la valeur du paramètre 'end' = now()
+    - set:
+        target: url.params.end
+        value: '[[ formatDate (now) "2006-01-02T15:04:05.999Z" ]]'
+
+  # Gestion de la pagination via continuationToken
+  response.pagination:
+    - set:
+        target: url.params.start
+        value: '[[ .last_response.url.params.Get "start" ]]'
+        fail_on_template_error: true
+
+    - set:
+        target: url.params.end
+        value: '[[ .last_response.url.params.Get "end" ]]'
+        fail_on_template_error: true
+
+    - set:
+        target: url.params.continuationToken
+        value: >-
+          [[
+            if index .last_response.body "continuationToken"
+            then .last_response.body.continuationToken
+            end
+          ]]
+        fail_on_template_error: true
+
+  # Définition du curseur : on met à jour last_update_at
+  # avec la date du dernier événement collecté.
+  cursor:
+    last_update_at:
+      value: >-
+        [[
+          // Si on a un "last_event_date" non-nul (donc un événement a été reçu),
+          // on l'utilise comme nouvelle valeur du curseur.
+          // Sinon, on conserve la valeur précédente.
+          if (not (eq .last_event_date nil))
+          then .last_event_date
+          else .cursor.last_update_at
+          end
+        ]]
+
+  # Split des événements + récupération de la date du dernier event
+  response.split:
+    target: body.data
+    ignore_empty_value: true
+    keep_parent: true  # pour continuer d'accéder à .last_response.body.xxx
+    transforms:
+      - set:
+          target: last_event_date
+          # Adaptez la clé .date en fonction de la structure JSON de Bitwarden
+          value: '[[ .date ]]'
+
+  tags:
+    - forwarded
+    - bitwarden-event
+
+  # Évite d’ajouter host.name si vous n’en avez pas besoin
+  publisher_pipeline.disable_host: true
+-------
 filebeat:
   inputs:
     - id: httpjson-bitwarden
