@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Assign Stream Roles</title>
+  <style>
+    body { font-family: Arial; margin: 40px; }
+    label, select, button { display: block; margin: 15px 0; }
+  </style>
+</head>
+<body>
+
+  <h2>Assigner un rôle à un utilisateur sur un Stream</h2>
+
+  <label for="user">Utilisateur :</label>
+  <select id="user"></select>
+
+  <label for="stream">Stream :</label>
+  <select id="stream"></select>
+
+  <label for="role">Rôle :</label>
+  <select id="role">
+    <option value="stream-read">Lecture</option>
+    <option value="stream-edit">Édition</option>
+    <option value="stream-manage">Gestion</option>
+  </select>
+
+  <button onclick="assignRole()">Assigner</button>
+
+  <div id="result"></div>
+
+  <script>
+    const token = 'VOTRE_TOKEN_API'; // À remplacer
+    const baseUrl = 'https://graylog.example.com:9000/api';
+
+    async function loadUsers() {
+      const res = await fetch(`${baseUrl}/users`, {
+        headers: { Authorization: `Token ${token}` }
+      });
+      const data = await res.json();
+      const select = document.getElementById('user');
+      data.users.forEach(u => {
+        const option = document.createElement('option');
+        option.value = u.username;
+        option.text = u.username;
+        select.add(option);
+      });
+    }
+
+    async function loadStreams() {
+      const res = await fetch(`${baseUrl}/streams`, {
+        headers: { Authorization: `Token ${token}` }
+      });
+      const data = await res.json();
+      const select = document.getElementById('stream');
+      data.streams.forEach(s => {
+        const option = document.createElement('option');
+        option.value = s.id;
+        option.text = s.title;
+        select.add(option);
+      });
+    }
+
+    async function assignRole() {
+      const user = document.getElementById('user').value;
+      const stream = document.getElementById('stream').value;
+      const role = document.getElementById('role').value;
+
+      const permission = `streams:${role}:${stream}`;
+      const res = await fetch(`${baseUrl}/users/${user}/permissions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Token ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify([permission])
+      });
+
+      const resultDiv = document.getElementById('result');
+      if (res.ok) {
+        resultDiv.innerText = 'Rôle assigné avec succès !';
+      } else {
+        const error = await res.text();
+        resultDiv.innerText = `Erreur : ${error}`;
+      }
+    }
+
+    loadUsers();
+    loadStreams();
+  </script>
+</body>
+</html>
