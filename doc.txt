@@ -1,1 +1,304 @@
-d
+
+Documentation de Troubleshooting pour la Plateforme SIEM
+1. Introduction
+Ce document décrit les scénarios de pannes et les procédures de dépannage pour l'architecture SIEM en place. L'objectif est de fournir aux administrateurs une approche structurée pour diagnostiquer et résoudre rapidement les problèmes courants.
+
+Rappel de l'Architecture :
+
+Sources : Clients Linux/Windows, Équipements réseau.
+Collecte : Filebeat, Winlogbeat, Syslog.
+Traitement/Parsing : Logstash.
+File d'attente (Buffer) : Apache Kafka.
+Analyse & Stockage : Graylog (avec OpenSearch pour l'indexation et MongoDB pour la configuration).
+Outils de diagnostic : Redpanda Console (pour visualiser Kafka).
+2. Méthodologie Générale de Dépannage
+Avant de plonger dans des scénarios spécifiques, suivez toujours cette approche méthodique :
+
+Qualifier le problème :
+Le problème est-il global (aucun log n'arrive) ou isolé (une seule source, un seul type de log) ?
+Depuis quand le problème est-il observé ?
+Y a-t-il eu un changement récent (mise à jour, modification de configuration, etc.) ?
+Suivre le flux du log : La méthode la plus efficace est de suivre le cheminement d'un log, étape par étape, de la source à la destination finale.
+Étape A : Le client envoie-t-il le log ?
+Étape B : Logstash reçoit-il et traite-t-il le log ?
+Étape C : Le log est-il publié dans Kafka ?
+Étape D : Graylog consomme-t-il le log depuis Kafka et l'indexe-t-il ?
+Vérifier l'état des services : Sur chaque serveur, vérifiez que les services critiques sont en cours d'exécution.
+systemctl status filebeat (ou winlogbeat, rsyslog, etc.)
+systemctl status logstash
+systemctl status kafka
+systemctl status zookeeper (si utilisé par votre Kafka)
+systemctl status opensearch
+systemctl status mongod
+systemctl status graylog-server
+Consulter les logs des composants : La solution se trouve souvent dans les logs de l'application elle-même.
+Filebeat/Winlogbeat : /var/log/filebeat/filebeat ou via journalctl -u filebeat.
+Logstash : /var/log/logstash/logstash-plain.log.
+Kafka : /var/log/kafka/server.log.
+Graylog : /var/log/graylog-server/server.log.
+OpenSearch : /var/log/opensearch/opensearch.log.
+3. Scénarios de Dépannage Détaillés
+Scénario 1 : Absence totale des logs d'une source spécifique (ex: un serveur web)
+Symptôme : Aucune donnée du serveur SRV-WEB-01 n'apparaît dans les recherches Graylog. Les autres sources fonctionnent correctement.
+
+Investigation et Résolution :
+
+Vérification sur le client (SRV-WEB-01)
+Le service est-il actif ?
+Pour Filebeat : sudo systemctl status filebeat
+Pour Winlogbeat : Get-Service winlogbeat (dans PowerShell)
+Pour Syslog : sudo systemctl status rsyslog
+La configuration est-elle correcte ?
+Vérifiez le fichier de configuration (filebeat.yml, winlogbeat.yml, rsyslog.conf). L'adresse IP et le port de sortie (vers Logstash) sont-ils corrects ?
+Exemple pour Filebeat : output.logstash.hosts: ["logstash.example.com:5044"]
+Y a-t-il des erreurs dans les logs de l'agent ?
+sudo journalctl -u filebeat -f
+Cherchez des messages d'erreur comme "connection refused", "permission denied" (sur les fichiers de log à lire), "pipeline blocked".
+La connectivité réseau est-elle bonne ?
+Depuis le client, tentez de vous connecter au port d'écoute de Logstash :
+telnet <ip_logstash> <port> (ex: telnet 10.0.1.10 5044)
+Si la connexion échoue, vérifiez les firewalls (sur le client, le serveur Logstash, et entre les deux).
+Vérification sur Logstash
+Logstash reçoit-il quelque chose ?
+Examinez les logs de Logstash (/var/log/logstash/logstash-plain.log). Cherchez des erreurs de connexion ou de parsing liées à l'IP du client.
+Le input est-il bien configuré ?
+Vérifiez que le fichier de configuration de la pipeline Logstash (/etc/logstash/conf.d/) contient un input qui écoute sur le bon port (ex: input { beats { port => 5044 } }).
+Un filtre bloque-t-il le message ?
+Examinez la section filter de votre configuration. Une condition if ou une instruction drop {} pourrait supprimer les messages de cette source par erreur.
+Pour débugger, ajoutez une sortie stdout temporaire dans votre configuration Logstash pour voir les événements traités en temps réel sur la console :
+output {
+  stdout { codec => rubydebug }
+}
+Use code with caution.
+Ruby
+Vérification sur Kafka
+Si tout semble bon jusqu'à Logstash, vérifiez si le message a atteint Kafka. C'est le rôle de Redpanda Console ou de l'outil en ligne de commande kafka-console-consumer.
+Utilisation de kafka-console-consumer :
+# Remplacez <topic_name> par le topic où Logstash est censé écrire
+kafka-console-consumer.sh --bootstrap-server <kafka_broker_ip>:9092 --topic <topic_name> --from-beginning | grep "SRV-WEB-01"
+Use code with caution.
+Bash
+Si le message n'est pas dans Kafka, le problème se situe entre le client et Logstash, ou dans Logstash lui-même.
+Si le message est dans Kafka, le problème se situe en aval (côté Graylog).
+Vérification sur Graylog
+L'input Graylog est-il actif ?
+Dans l'interface web de Graylog, allez dans System -> Inputs.
+Localisez l'input de type Kafka et assurez-vous qu'il est "Running" (en vert).
+Vérifiez les métriques de l'input : le compteur "Total incoming messages" doit s'incrémenter.
+Graylog a-t-il des problèmes de connexion à Kafka ?
+Consultez les logs de Graylog (/var/log/graylog-server/server.log). Cherchez des erreurs liées à Kafka ("Failed to connect", "Could not fetch messages").
+Une règle de traitement (pipeline) ou un "stream" écarte-t-il le message ?
+Vérifiez si le message arrive dans le stream "All messages". S'il n'y est pas, c'est qu'il est probablement droppé par une pipeline de traitement avant l'indexation. Allez dans System -> Pipelines et examinez les règles.
+Scénario 2 : Les logs arrivent dans Graylog mais ne sont pas correctement parsés
+Symptôme : Les logs Apache apparaissent comme une seule longue chaîne de caractères au lieu d'être découpés en champs (IP source, code de statut, URL, etc.). Un tag _grokparsefailure est souvent présent.
+
+Investigation et Résolution :
+
+Identifier où le parsing est effectué :
+Dans Logstash : Si vous utilisez un filtre grok dans votre pipeline Logstash.
+Dans Graylog : Si vous utilisez un "Extractor" sur un Input, ou une règle de pipeline grok().
+Dépannage du parsing dans Logstash :
+Récupérer un message brut : Trouvez un message non parsé dans Graylog et copiez son champ message complet.
+Tester le pattern Grok : Utilisez le "Grok Debugger" (disponible dans Kibana ou via des outils en ligne) pour tester votre pattern Grok contre le message brut.
+Corriger le pattern : Ajustez votre pattern dans le fichier de configuration de Logstash (/etc/logstash/conf.d/your-pipeline.conf).
+Redémarrer Logstash : sudo systemctl restart logstash et observez les nouveaux messages entrants.
+Dépannage du parsing dans Graylog :
+Localiser l'extracteur/la règle :
+Allez dans System -> Inputs, sélectionnez l'input concerné, puis "Manage extractors".
+Ou allez dans System -> Pipelines et trouvez la règle de parsing.
+Utiliser l'outil de test de Graylog :
+Quand vous éditez un extracteur, Graylog propose une option "Try against example". Collez votre message brut et vérifiez si les champs sont extraits correctement.
+Ajustez le pattern Grok directement dans l'interface et testez jusqu'à obtenir le résultat souhaité.
+Vérifier l'ordre d'exécution : Si vous utilisez plusieurs extracteurs ou règles de pipeline, assurez-vous qu'ils s'exécutent dans le bon ordre.
+Scénario 3 : Latence élevée, les logs mettent du temps à apparaître
+Symptôme : Il y a un délai de plusieurs minutes, voire heures, entre le moment où un événement se produit et son apparition dans Graylog.
+
+Investigation et Résolution :
+
+C'est un problème de bottleneck. Il faut identifier le composant qui est saturé.
+
+Vérifier le "Consumer Lag" de Kafka : C'est l'indicateur le plus important. Il mesure le retard entre le producteur (Logstash) et le consommateur (Graylog).
+Avec Redpanda Console : Allez dans la section "Consumers", trouvez le groupe de consommateurs de Graylog et regardez la colonne "Lag". Un lag élevé signifie que Graylog n'arrive pas à suivre le rythme.
+En ligne de commande :
+kafka-consumer-groups.sh --bootstrap-server <kafka_ip>:9092 --describe --group <graylog_consumer_group>
+Use code with caution.
+Bash
+Regardez la colonne LAG. Si elle est constamment élevée, le problème est soit Graylog, soit OpenSearch.
+Si le Lag est élevé (problème côté Graylog/OpenSearch) :
+Le Journal de Graylog est-il plein ?
+Dans Graylog UI, allez dans System -> Overview. Regardez le widget "Journal". S'il est plein à 100% ou presque, cela signifie que Graylog ne peut pas écrire assez vite dans OpenSearch.
+Vérifier les performances de Graylog :
+Sur le serveur Graylog, utilisez top ou htop. Le CPU ou la mémoire sont-ils saturés ? Les paramètres de la JVM sont-ils suffisants (/etc/default/graylog-server) ?
+Vérifier les performances d'OpenSearch :
+Santé du cluster : curl -X GET "http://localhost:9200/_cluster/health?pretty". Le statut doit être green. yellow est acceptable mais indique des répliques non allouées. red est critique.
+Utilisation des ressources : Vérifiez le CPU, la RAM et surtout l'I/O disque (iostat -xz 1) sur les nœuds OpenSearch. L'écriture sur disque est souvent le goulot d'étranglement.
+Espace disque : df -h. Si un nœud OpenSearch manque d'espace disque, il passera en lecture seule, bloquant toute nouvelle indexation. C'est une cause très fréquente de panne.
+Si le Lag est faible (problème côté Logstash/Source) :
+Cela signifie que les données n'arrivent même pas rapidement à Kafka.
+Vérifier les performances de Logstash :
+Le CPU ou la mémoire sont-ils saturés sur le serveur Logstash ?
+Avez-vous des filtres très coûteux en ressources (ex: dns, geoip avec des requêtes externes, des Grok très complexes) ?
+La file d'attente interne de Logstash (persistent queue) est-elle pleine ? Vérifiez les logs de Logstash pour des avertissements à ce sujet.
+Vérifier le réseau entre les sources, Logstash et Kafka. Une saturation réseau peut ralentir l'ensemble du pipeline.
+Scénario 4 : Panne complète, plus aucun log n'arrive
+Symptôme : Graylog est vide, aucune nouvelle donnée n'est indexée de quelque source que ce soit.
+
+Investigation et Résolution :
+
+Vérifier Graylog et ses dépendances :
+sudo systemctl status graylog-server : Le service est-il actif ? Sinon, consultez /var/log/graylog-server/server.log pour la cause de l'échec au démarrage.
+sudo systemctl status opensearch : Le service est-il actif ?
+sudo systemctl status mongod : Le service est-il actif ?
+Graylog ne démarrera pas si il ne peut pas se connecter à OpenSearch et MongoDB.
+Vérifier OpenSearch :
+Comme mentionné précédemment, vérifiez la santé du cluster (_cluster/health) et l'espace disque (df -h). Un disque plein sur un nœud de données est la cause la plus probable d'un arrêt total de l'indexation.
+Vérifier Kafka :
+sudo systemctl status kafka : Le service est-il actif ?
+Utilisez Redpanda Console pour voir si de nouveaux messages arrivent dans les topics. Si oui, le problème est en aval (Graylog). Si non, le problème est en amont (Logstash).
+Vérifier Logstash :
+sudo systemctl status logstash : Le service est-il actif ?
+Consultez les logs de Logstash. Cherchez des erreurs fatales, notamment des problèmes de connexion à Kafka.
+
+
+
+
+
+
+
+
+
+Absolument. La résolution des problèmes de shards non alloués (unassigned shards) via curl est une compétence essentielle pour tout administrateur OpenSearch/Elasticsearch. Un cluster en état yellow ou red est souvent dû à ce problème.
+
+Voici une approche structurée, allant du diagnostic à la résolution, avec les commandes curl correspondantes.
+
+Comprendre Pourquoi les Shards ne sont pas Alloués
+Avant de forcer quoi que ce soit, il est crucial de comprendre pourquoi un shard n'est pas alloué. Les raisons les plus courantes sont :
+
+Démarrage/Redémarrage du Cluster : Le cluster attend un peu avant d'allouer les répliques pour éviter une surcharge réseau. C'est temporaire.
+Espace Disque Insuffisant : C'est la cause la plus fréquente. OpenSearch n'allouera pas de shards sur un nœud dont le disque est trop plein (dépassement des "watermarks").
+Nœud Hors Ligne : Un nœud a quitté le cluster (crash, redémarrage, problème réseau). Les shards qui s'y trouvaient sont maintenant non alloués.
+Paramètres d'Allocation : Des règles (allocation filtering) peuvent empêcher un shard d'être placé sur les nœuds disponibles.
+Corruption d'un Shard : Rare, mais un shard peut être corrompu, et le cluster refuse de l'utiliser.
+Perte du Shard Primaire : Si le shard primaire est perdu et que ses répliques ne sont pas à jour, le cluster attend une intervention manuelle.
+Étape 1 : Diagnostiquer le Problème (Les commandes curl d'investigation)
+N'exécutez aucune commande de modification avant d'avoir terminé cette étape.
+
+(Remplacez localhost:9200 par l'adresse de l'un de vos nœuds de cluster)
+
+1. Vérifier la Santé Globale du Cluster
+Cette commande vous donne l'état général. yellow signifie que les shards primaires sont alloués mais pas toutes les répliques. red signifie qu'au moins un shard primaire n'est pas alloué (perte de données potentielle ou indisponibilité d'un index).
+
+curl -X GET "http://localhost:9200/_cluster/health?pretty"
+Use code with caution.
+Bash
+2. Lister les Shards non Alloués
+Ceci est votre commande de base pour voir exactement quels shards sont concernés.
+
+curl -X GET "http://localhost:9200/_cat/shards?v&h=index,shard,prirep,state,unassigned.reason" | grep UNASSIGNED
+Use code with caution.
+Bash
+v : Affiche les en-têtes de colonnes.
+h=... : Permet de sélectionner les colonnes à afficher.
+grep UNASSIGNED : Filtre pour ne montrer que les shards qui posent problème.
+La colonne unassigned.reason est votre premier indice.
+
+3. Obtenir une Explication Détaillée (La Commande la Plus Importante)
+C'est la commande la plus utile pour le diagnostic. OpenSearch vous expliquera en détail pourquoi il ne peut pas allouer un shard.
+
+curl -X GET "http://localhost:9200/_cluster/allocation/explain?pretty"
+Use code with caution.
+Bash
+Le résultat JSON vous dira :
+
+"can_allocate": "no" : La raison pour laquelle le shard ne peut pas être alloué.
+"node_allocation_decisions" : Une liste de tous les nœuds du cluster et la raison pour laquelle chacun d'eux a été écarté pour l'allocation de ce shard (ex: "decision": "NO", "reason": "the node is above the high disk watermark cluster setting").
+Étape 2 : Résoudre les Problèmes (Les commandes curl d'action)
+Basé sur le diagnostic de l'étape 1, voici les solutions.
+
+Cas 1 : Problème d'Espace Disque (disk watermark reached)
+Le diagnostic (allocation/explain) vous a montré que les nœuds sont trop pleins.
+
+Solution A (Recommandée) : Libérer de l'espace disque
+
+Supprimez des anciens index : curl -X DELETE "http://localhost:9200/vieux-index-2022-01"
+Augmentez la taille du disque sur les VM/serveurs.
+Solution B (Temporaire) : Augmenter les limites "watermark"
+À utiliser avec prudence, car cela peut entraîner un remplissage complet du disque.
+
+curl -X PUT "http://localhost:9200/_cluster/settings?pretty" -H 'Content-Type: application/json' -d'
+{
+  "transient": {
+    "cluster.routing.allocation.disk.watermark.low": "88%",
+    "cluster.routing.allocation.disk.watermark.high": "92%",
+    "cluster.routing.allocation.disk.watermark.flood_stage": "95%"
+  }
+}
+'
+Use code with caution.
+Bash
+Une fois l'espace libéré, n'oubliez pas de remettre les valeurs par défaut en passant null :
+... -d'{"transient":{"cluster.routing.allocation.disk...": null}}'
+
+Cas 2 : Nœud temporairement parti / Tentative d'allocation échouée
+Le cluster a essayé d'allouer le shard mais a échoué pour une raison temporaire (ex: un nœud venait de redémarrer).
+
+Solution : Forcer une nouvelle tentative d'allocation
+C'est une commande sûre qui demande simplement au cluster de réessayer d'allouer tous les shards non assignés.
+
+curl -X POST "http://localhost:9200/_cluster/reroute?retry_failed=true"
+Use code with caution.
+Bash
+Cas 3 : Forcer l'Allocation d'un Shard Spécifique (DANGEREUX)
+ATTENTION : N'utilisez ces commandes que si vous comprenez les conséquences, notamment la perte de données. C'est une mesure de dernier recours.
+
+Contexte : Le shard primaire a été perdu (le nœud est mort et ne reviendra pas) et le cluster ne veut pas promouvoir une réplique qu'il considère comme "périmée" (pas parfaitement synchronisée).
+
+Solution A : Allouer une réplique "périmée" comme nouveau primaire
+Vous acceptez de perdre les quelques données qui n'avaient pas été synchronisées entre l'ancien primaire et cette réplique.
+
+# Remplacer les valeurs <...>
+curl -X POST "http://localhost:9200/_cluster/reroute?pretty" -H 'Content-Type: application/json' -d'
+{
+  "commands": [
+    {
+      "allocate_stale_primary": {
+        "index": "<nom_de_l_index>",
+        "shard": <numero_du_shard>,
+        "node": "<nom_du_noeud_contenant_la_replique>",
+        "accept_data_loss": true
+      }
+    }
+  ]
+}
+'
+Use code with caution.
+Bash
+Solution B : Allouer un shard primaire vide (PERTE TOTALE DES DONNÉES DU SHARD)
+À utiliser si le primaire ET toutes ses répliques sont définitivement perdus. Cela crée un nouveau shard vide pour que l'index redevienne fonctionnel (vert), mais toutes les données de ce shard sont perdues.
+
+# Remplacer les valeurs <...>
+curl -X POST "http://localhost:9200/_cluster/reroute?pretty" -H 'Content-Type: application/json' -d'
+{
+  "commands": [
+    {
+      "allocate_empty_primary": {
+        "index": "<nom_de_l_index>",
+        "shard": <numero_du_shard>,
+        "node": "<nom_du_noeud_ou_creer_le_shard_vide>",
+        "accept_data_loss": true
+      }
+    }
+  ]
+}
+'
+Use code with caution.
+Bash
+Synthèse du Workflow de Dépannage
+Problème / État	Commande de Diagnostic (curl)	Commande de Résolution (curl)
+État yellow ou red	_cluster/health?pretty	(Dépend de la cause)
+Identifier les shards	_cat/shards?v&h=... | grep UNASSIGNED	-
+Comprendre le "pourquoi"	_cluster/allocation/explain?pretty	-
+Cause: Disque plein	_cat/allocation?v ou allocation/explain	Libérer de l'espace ou PUT _cluster/settings pour changer les watermarks (temporaire).
+Cause: Échec temporaire	allocation/explain montre "allocation_failed"	POST _cluster/reroute?retry_failed=true
+Cause: Perte de primaire	allocation/explain montre primary shard is not active	POST _cluster/reroute avec allocate_stale_primary et accept_data_loss: true (ATTENTION : Perte de données)
+Cause: Perte totale	allocation/explain montre qu'aucune copie des données n'existe	POST _cluster/reroute avec allocate_empty_primary et accept_data_loss: true (ATTENTION : Perte TOTALE des données)
