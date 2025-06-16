@@ -1,11 +1,9 @@
 import requests
 import sys
-import getpass # Pour la saisie sécurisée du token
-import os # Pour nettoyer l'écran
+import os
+import configparser # Importation pour lire le fichier .ini
 
-# --- Configuration ---
-# L'URL de base de votre API Graylog. Modifiez-la si nécessaire.
-GRAYLOG_URL = "https://votre-serveur-graylog.com/api"
+# --- Suppression des constantes, car elles seront dans config.ini ---
 
 class GraylogAPI:
     """Classe pour interagir avec l'API de Graylog."""
@@ -17,9 +15,8 @@ class GraylogAPI:
             'Accept': 'application/json',
             'X-Requested-By': 'PythonInteractiveClient'
         })
-        # L'authentification se fait avec le token comme nom d'utilisateur et "token" comme mot de passe.
         self.session.auth = (token, 'token')
-        self.last_response = None # Pour stocker la dernière réponse
+        self.last_response = None
 
     def _make_request(self, method, endpoint, params=None, data=None):
         """Méthode privée pour effectuer des requêtes et gérer les erreurs."""
@@ -28,8 +25,8 @@ class GraylogAPI:
             response = self.session.request(method, url, params=params, json=data)
             self.last_response = response
             response.raise_for_status()
-            if response.status_code == 204: # 204 No Content
-                return {} # Succès mais pas de contenu JSON
+            if response.status_code == 204:
+                return {}
             return response.json()
         except requests.exceptions.HTTPError as e:
             print(f"\n❌ Erreur HTTP: {e.response.status_code} pour l'URL {url}")
@@ -67,7 +64,7 @@ class GraylogAPI:
     def grant_user_to_stream(self, username, stream_id, role):
         """Assigne un utilisateur à un stream avec un rôle spécifique."""
         stream_grn = f"grn::::stream:{stream_id}"
-        user_grn = f"grn::::user:{username}" # L'API utilise le username pour le GRN
+        user_grn = f"grn::::user:{username}"
         endpoint = f"/authz/shares/entities/{stream_grn}"
         payload = {
             "selected_grantee_capability": role,
@@ -78,18 +75,17 @@ class GraylogAPI:
 
 
 def clear_screen():
-    """Efface l'écran du terminal pour une meilleure lisibilité."""
+    """Efface l'écran du terminal."""
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def select_from_list(items, title, display_key, return_key):
-    """Affiche une liste d'items et demande à l'utilisateur d'en choisir un."""
+    """Affiche une liste et demande à l'utilisateur de choisir un item."""
     print(f"\n--- {title} ---")
     if not items:
         print("La liste est vide.")
         return None
 
     for i, item in enumerate(items):
-        # Affiche le nom complet pour les utilisateurs si disponible, sinon le username
         display_value = item.get(display_key)
         if display_key == 'username' and 'full_name' in item and item['full_name']:
             display_value = f"{item['full_name']} ({item['username']})"
@@ -97,7 +93,9 @@ def select_from_list(items, title, display_key, return_key):
     
     while True:
         try:
-            choice = input(f"\n> Veuillez choisir un {title.lower().split(' ')[0]} (entrez le numéro) : ")
+            choice = input(f"\n> Veuillez choisir un {title.lower().split(' ')[0]} (entrez le numéro, ou 'q' pour quitter) : ")
+            if choice.lower() == 'q':
+                return None
             choice_index = int(choice) - 1
             if 0 <= choice_index < len(items):
                 return items[choice_index][return_key]
@@ -106,7 +104,6 @@ def select_from_list(items, title, display_key, return_key):
         except ValueError:
             print("Entrée invalide, veuillez entrer un numéro.")
         except KeyboardInterrupt:
-            print("\nOpération annulée.")
             return None
 
 
@@ -117,21 +114,28 @@ def main():
     print("=== Outil d'Assignation de Permissions Graylog ===")
     print("="*50)
 
-    # --- Connexion ---
-    graylog_url_input = input(f"Entrez l'URL de l'API Graylog ou appuyez sur Entrée pour utiliser [{GRAYLOG_URL}]: ")
-    if not graylog_url_input:
-        graylog_url_input = GRAYLOG_URL
+    # --- Lecture de la configuration ---
+    config_file = 'config.ini'
+    config = configparser.ConfigParser()
+    if not os.path.exists(config_file):
+        print(f"❌ Erreur: Le fichier de configuration '{config_file}' n'a pas été trouvé.")
+        print("Veuillez créer ce fichier avec une section [graylog] contenant 'url' et 'token'.")
+        sys.exit(1)
         
+    config.read(config_file)
+    
     try:
-        graylog_token = getpass.getpass("Entrez votre Token d'API Graylog : ")
-        if not graylog_token:
-            print("Le token ne peut pas être vide.")
-            sys.exit(1)
-    except KeyboardInterrupt:
-        print("\nOpération annulée.")
+        graylog_url = config['graylog']['url']
+        graylog_token = config['graylog']['token']
+        if not graylog_url or not graylog_token or "VOTRE" in graylog_token:
+             raise KeyError
+    except KeyError:
+        print(f"❌ Erreur: Le fichier '{config_file}' doit contenir les clés 'url' et 'token' dans la section [graylog].")
+        print("Veuillez vérifier que le fichier est correctement rempli.")
         sys.exit(1)
 
-    api = GraylogAPI(graylog_url_input, graylog_token)
+    print(f"🔧 Connexion à l'instance Graylog : {graylog_url}")
+    api = GraylogAPI(graylog_url, graylog_token)
 
     # --- Récupération des données ---
     print("\n🔄 Récupération des données depuis Graylog...")
@@ -139,48 +143,57 @@ def main():
     users = api.get_users()
 
     if streams is None or users is None:
-        print("\nImpossible de récupérer les données de base (streams/utilisateurs). Vérifiez votre URL et votre token.")
+        print("\nImpossible de récupérer les données de base (streams/utilisateurs).")
+        print("Veuillez vérifier l'URL et le token dans votre fichier config.ini.")
         sys.exit(1)
 
     clear_screen()
     
-    # --- Sélection interactive ---
-    selected_stream_id = select_from_list(streams, "Liste des Streams", 'title', 'id')
-    if not selected_stream_id: sys.exit(1)
-    
-    # L'API a besoin du USERNAME pour construire le GRN, pas de l'ID numérique de l'utilisateur.
-    selected_username = select_from_list(users, "Liste des Utilisateurs", 'username', 'username')
-    if not selected_username: sys.exit(1)
+    # --- Boucle interactive ---
+    while True:
+        selected_stream_id = select_from_list(streams, "Liste des Streams", 'title', 'id')
+        if not selected_stream_id: break
+        
+        selected_username = select_from_list(users, "Liste des Utilisateurs", 'username', 'username')
+        if not selected_username: break
 
-    # --- Sélection du rôle ---
-    roles = ['viewer', 'manager']
-    selected_role = select_from_list(
-        [{'role': r} for r in roles], 
-        "Rôle à assigner", 
-        'role', 
-        'role'
-    )
-    if not selected_role: sys.exit(1)
+        roles = ['viewer', 'manager']
+        selected_role = select_from_list(
+            [{'role': r} for r in roles], 
+            "Rôle à assigner", 
+            'role', 
+            'role'
+        )
+        if not selected_role: break
 
-    # --- Confirmation et Action ---
-    print("\n--- RÉCAPITULATIF ---")
-    print(f"  Stream   : {selected_stream_id}")
-    print(f"  Utilisateur: {selected_username}")
-    print(f"  Rôle     : {selected_role}")
-    
-    confirm = input("\n> Confirmez-vous cette assignation ? (o/N) : ").lower()
-    if confirm != 'o':
-        print("Opération annulée.")
-        sys.exit(0)
+        print("\n--- RÉCAPITULATIF ---")
+        print(f"  Stream   : {selected_stream_id}")
+        print(f"  Utilisateur: {selected_username}")
+        print(f"  Rôle     : {selected_role}")
+        
+        confirm = input("\n> Confirmez-vous cette assignation ? (o/N) : ").lower()
+        if confirm == 'o':
+            print("\n🚀 Assignation en cours...")
+            success = api.grant_user_to_stream(selected_username, selected_stream_id, selected_role)
+            if success:
+                print(f"\n✅ Succès ! L'utilisateur '{selected_username}' a bien été assigné au stream avec le rôle '{selected_role}'.")
+            else:
+                print("\n❌ Échec de l'assignation. Veuillez vérifier les logs d'erreur ci-dessus.")
+        else:
+            print("Opération annulée.")
+        
+        # Demander si l'utilisateur veut continuer
+        another = input("\nVoulez-vous effectuer une autre assignation ? (o/N) : ").lower()
+        if another != 'o':
+            break
+        clear_screen()
 
-    print("\n🚀 Assignation en cours...")
-    success = api.grant_user_to_stream(selected_username, selected_stream_id, selected_role)
-
-    if success:
-        print(f"\n✅ Succès ! L'utilisateur '{selected_username}' a bien été assigné au stream avec le rôle '{selected_role}'.")
-    else:
-        print("\n❌ Échec de l'assignation. Veuillez vérifier les logs d'erreur ci-dessus.")
+    print("\nFin du script. Au revoir !")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\nOpération interrompue par l'utilisateur. Au revoir !")
+        sys.exit(0)
