@@ -17,9 +17,8 @@ class GraylogAPI:
             'Accept': 'application/json',
             'X-Requested-By': 'PythonInteractiveClient'
         })
-        # L'authentification se fait avec le token comme nom d'utilisateur et "token" comme mot de passe.
         self.session.auth = (token, 'token')
-        self.last_response = None # Pour stocker la dernière réponse pour le débogage
+        self.last_response = None
 
     def _make_request(self, method, endpoint, params=None, data=None):
         """Méthode privée pour effectuer les requêtes et gérer les erreurs communes."""
@@ -27,12 +26,9 @@ class GraylogAPI:
         try:
             response = self.session.request(method, url, params=params, json=data)
             self.last_response = response
-            response.raise_for_status() # Lève une exception pour les erreurs 4xx/5xx
-
-            # Pour les requêtes réussies qui ne retournent pas de contenu (ex: 204 No Content)
+            response.raise_for_status()
             if response.status_code in [200, 201, 204]:
                 return response.json() if response.content else {}
-            
             return response.json()
         except requests.exceptions.HTTPError as e:
             print(f"\n❌ Erreur HTTP: {e.response.status_code} pour l'URL {url}")
@@ -47,7 +43,7 @@ class GraylogAPI:
         """Récupère toutes les pages d'un résultat paginé."""
         all_items = []
         page = 1
-        per_page = 50 # Taille de page standard
+        per_page = 50
         while True:
             params = {'page': page, 'per_page': per_page}
             data = self._make_request('GET', endpoint, params=params)
@@ -75,9 +71,10 @@ class GraylogAPI:
         data = self._make_request('GET', endpoint)
         return data.get('grants', []) if data else []
 
-    def grant_user_to_stream(self, username, stream_id, role):
+    # --- MÉTHODE CORRIGÉE ---
+    def grant_user_to_stream(self, user_id, stream_id, role):
         """
-        Assigne un utilisateur à un stream avec un rôle, en préservant les permissions existantes.
+        Assigne un utilisateur à un stream avec un rôle, en utilisant l'ID de l'utilisateur.
         """
         print("\n1. Récupération des permissions actuelles du stream...")
         current_permissions = self.get_specific_stream_permissions(stream_id)
@@ -85,19 +82,18 @@ class GraylogAPI:
             print("❌ Impossible de récupérer les permissions actuelles. Abandon.")
             return False
 
-        # 2. Construction du nouvel objet de permissions à partir des permissions existantes
         new_permissions_payload = {}
         for perm in current_permissions:
             new_permissions_payload[perm['grantee']] = perm['capability']
         
         print(f"   Permissions existantes trouvées: {len(new_permissions_payload)}")
         
-        # 3. Ajout ou modification de la permission pour le nouvel utilisateur
-        user_grn = f"grn::::user:{username}"
-        print(f"2. Ajout/Mise à jour de la permission '{role}' pour l'utilisateur '{username}' (GRN: {user_grn})")
+        # --- CHANGEMENT CLÉ ICI ---
+        # Construction du GRN avec l'ID de l'utilisateur, et non son username.
+        user_grn = f"grn::::user:{user_id}"
+        print(f"2. Ajout/Mise à jour de la permission '{role}' pour l'utilisateur avec ID '{user_id}' (GRN: {user_grn})")
         new_permissions_payload[user_grn] = role
         
-        # 4. Construction du payload final pour la requête POST
         stream_grn = f"grn::::stream:{stream_id}"
         endpoint = f"/authz/shares/entities/{stream_grn}"
         final_payload = {
@@ -106,17 +102,19 @@ class GraylogAPI:
         
         print(f"3. Envoi du payload de mise à jour complet à l'API...")
         
-        # 5. Envoi de la requête
         response = self._make_request('POST', endpoint, data=final_payload)
         
         return response is not None
 
 def clear_screen():
-    """Efface l'écran du terminal pour une meilleure lisibilité."""
+    """Efface l'écran du terminal."""
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def select_from_list(items, title, display_key, return_key):
-    """Affiche une liste d'items et demande à l'utilisateur d'en choisir un."""
+# --- FONCTION DE SÉLECTION MISE À JOUR ---
+def select_from_list(items, title, display_key):
+    """
+    Affiche une liste d'items, demande à l'utilisateur de choisir et retourne l'objet complet.
+    """
     print(f"\n--- {title} ---")
     if not items:
         print("La liste est vide.")
@@ -135,7 +133,8 @@ def select_from_list(items, title, display_key, return_key):
                 return None
             choice_index = int(choice) - 1
             if 0 <= choice_index < len(items):
-                return items[choice_index][return_key]
+                # Retourne l'objet dictionnaire complet, pas juste une clé
+                return items[choice_index]
             else:
                 print("Numéro invalide, veuillez réessayer.")
         except ValueError:
@@ -147,7 +146,7 @@ def main():
     """Fonction principale interactive."""
     clear_screen()
     print("="*50)
-    print("=== Outil d'Assignation de Permissions Graylog ===")
+    print("=== Outil d'Assignation de Permissions Graylog (v3 - Corrigé) ===")
     print("="*50)
 
     config_file = 'config.ini'
@@ -165,7 +164,6 @@ def main():
              raise KeyError
     except KeyError:
         print(f"❌ Erreur: Le fichier '{config_file}' doit contenir les clés 'url' et 'token' dans la section [graylog].")
-        print("Veuillez vérifier que le fichier est correctement rempli.")
         sys.exit(1)
 
     print(f"🔧 Connexion à l'instance Graylog : {graylog_url}")
@@ -182,34 +180,38 @@ def main():
     clear_screen()
     
     while True:
-        selected_stream_id = select_from_list(streams, "Liste des Streams", 'title', 'id')
-        if not selected_stream_id: break
+        selected_stream_obj = select_from_list(streams, "Liste des Streams", 'title')
+        if not selected_stream_obj: break
+        selected_stream_id = selected_stream_obj['id']
         
-        selected_username = select_from_list(users, "Liste des Utilisateurs", 'username', 'username')
-        if not selected_username: break
-
-        roles = ['viewer', 'manager']
-        selected_role = select_from_list(
-            [{'role': r} for r in roles], 
-            "Rôle à assigner", 
-            'role', 
-            'role'
-        )
-        if not selected_role: break
+        # --- CHANGEMENT CLÉ ICI ---
+        # On récupère l'objet utilisateur complet
+        selected_user_obj = select_from_list(users, "Liste des Utilisateurs", 'username')
+        if not selected_user_obj: break
+        # On extrait l'ID pour l'API et le username pour l'affichage
+        selected_user_id = selected_user_obj['id']
+        selected_username_for_display = selected_user_obj['username']
+        
+        roles_obj = [{'role': r} for r in ['viewer', 'manager']]
+        selected_role_obj = select_from_list(roles_obj, "Rôle à assigner", 'role')
+        if not selected_role_obj: break
+        selected_role = selected_role_obj['role']
 
         print("\n--- RÉCAPITULATIF ---")
-        print(f"  Stream   : {selected_stream_id}")
-        print(f"  Utilisateur: {selected_username}")
-        print(f"  Rôle     : {selected_role}")
+        print(f"  Stream     : {selected_stream_obj['title']} (ID: {selected_stream_id})")
+        print(f"  Utilisateur: {selected_username_for_display} (ID: {selected_user_id})")
+        print(f"  Rôle       : {selected_role}")
         
         confirm = input("\n> Confirmez-vous cette assignation ? (o/N) : ").lower()
         if confirm == 'o':
             print("\n🚀 Processus d'assignation...")
-            success = api.grant_user_to_stream(selected_username, selected_stream_id, selected_role)
+            # --- CHANGEMENT CLÉ ICI ---
+            # On passe l'ID de l'utilisateur à la méthode de l'API
+            success = api.grant_user_to_stream(selected_user_id, selected_stream_id, selected_role)
             if success:
                 print(f"\n✅ Succès ! Les permissions du stream ont été mises à jour.")
             else:
-                print("\n❌ Échec de l'assignation. Veuillez vérifier les logs d'erreur ci-dessus.")
+                print(f"\n❌ Échec de l'assignation. Veuillez vérifier les logs d'erreur ci-dessus.")
         else:
             print("Opération annulée.")
         
