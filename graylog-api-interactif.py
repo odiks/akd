@@ -67,9 +67,6 @@ class GraylogAPI:
         return data.get('grants', []) if data else []
 
     def grant_user_to_stream(self, user_id_to_add, stream_id, role, owner_user_id):
-        """
-        Assigne un utilisateur à un stream, en utilisant les noms de rôles corrects de l'API.
-        """
         print("\n1. Récupération des permissions actuelles du stream...")
         current_permissions = self.get_specific_stream_permissions(stream_id)
         if current_permissions is None:
@@ -169,6 +166,9 @@ def main():
         print("\nImpossible de récupérer les données de base.")
         sys.exit(1)
 
+    # --- NOUVEAU : Création des mappings pour faciliter les recherches ---
+    user_id_to_username_map = {user['id']: user['username'] for user in users}
+    
     ROLE_MAPPING = { 'Viewer': 'view', 'Manager': 'manage' }
     
     clear_screen()
@@ -178,35 +178,47 @@ def main():
         selected_stream_obj = select_from_list(streams, "Liste des Streams", 'title')
         if not selected_stream_obj: break
         selected_stream_id = selected_stream_obj['id']
-        owner_user_id = selected_stream_obj.get('creator_user_id')
-        if not owner_user_id:
+        
+        # Récupération de l'ID du créateur depuis l'objet stream
+        creator_id_from_stream = selected_stream_obj.get('creator_user_id')
+        if not creator_id_from_stream:
             print(f"❌ Erreur: ID du propriétaire introuvable pour le stream '{selected_stream_id}'.")
             continue
 
-        # --- NOUVELLE ÉTAPE : Confirmation du Propriétaire ---
+        # --- Étape 2 : Identification et Confirmation du Propriétaire ---
         print("\n" + "-"*50)
         print("--- ÉTAPE DE VÉRIFICATION DU PROPRIÉTAIRE ---")
-        owner_details = next((user for user in users if user['id'] == owner_user_id), None)
         
-        if owner_details:
-            print(f"Le propriétaire détecté pour ce stream est '{owner_details.get('username')}' (ID: {owner_user_id}).")
+        # On trouve le username du propriétaire grâce à son ID
+        owner_username = user_id_to_username_map.get(creator_id_from_stream)
+        
+        if not owner_username:
+            print(f"⚠️ Avertissement: Le propriétaire avec l'ID '{creator_id_from_stream}' n'a pas été trouvé dans la liste des utilisateurs actifs.")
+            print("   Il s'agit peut-être d'un utilisateur supprimé. La requête risque d'échouer.")
+            # On utilise l'ID original comme solution de repli
+            final_owner_id = creator_id_from_stream
         else:
-            print(f"Le propriétaire détecté a l'ID: {owner_user_id} (nom d'utilisateur introuvable).")
+            # On utilise l'ID qui correspond au nom d'utilisateur trouvé.
+            # Dans la plupart des cas, ce sera identique à creator_id_from_stream,
+            # mais cela respecte la logique de "mapper" le nom à un ID.
+            final_owner_id = creator_id_from_stream # Gardons la source de vérité de l'API stream
+
+        print(f"Le propriétaire détecté pour ce stream est '{owner_username or 'Utilisateur Inconnu'}'.")
+        print(f"L'ID suivant sera utilisé pour le rôle 'own' : {final_owner_id}")
         
-        confirm_owner = input("> Est-ce correct ? (o/N) : ").lower()
+        confirm_owner = input("> Confirmez-vous cet utilisateur comme propriétaire ? (o/N) : ").lower()
         if confirm_owner != 'o':
             print("Opération annulée. Retour à la sélection du stream.")
             clear_screen()
-            continue # Retourne au début de la boucle while
-        # --- FIN DE LA NOUVELLE ÉTAPE ---
-
-        # --- Étape 2 : Sélection de l'utilisateur à ajouter ---
+            continue
+        
+        # --- Étape 3 : Sélection de l'utilisateur à ajouter ---
         selected_user_obj = select_from_list(users, "Liste des Utilisateurs", 'username')
         if not selected_user_obj: break
         user_id_to_add = selected_user_obj['id']
         username_for_display = selected_user_obj['username']
         
-        # --- Étape 3 : Sélection du rôle ---
+        # --- Étape 4 : Sélection du rôle ---
         display_roles = list(ROLE_MAPPING.keys())
         roles_obj = [{'display_name': r} for r in display_roles]
         selected_role_obj = select_from_list(roles_obj, "Rôle à assigner", 'display_name')
@@ -215,17 +227,17 @@ def main():
         selected_display_name = selected_role_obj['display_name']
         api_role_value = ROLE_MAPPING[selected_display_name]
 
-        # --- Étape 4 : Récapitulatif et Confirmation Finale ---
+        # --- Étape 5 : Récapitulatif et Confirmation Finale ---
         print("\n--- RÉCAPITULATIF FINAL ---")
         print(f"  Stream       : {selected_stream_obj['title']} (ID: {selected_stream_id})")
         print(f"  Utilisateur  : {username_for_display} (ID: {user_id_to_add})")
         print(f"  Rôle         : {selected_display_name} (valeur API: '{api_role_value}')")
-        print(f"  Propriétaire (confirmé) : Utilisateur ID {owner_user_id} (rôle API: 'own')")
+        print(f"  Propriétaire (confirmé) : Utilisateur ID {final_owner_id} (rôle API: 'own')")
         
         confirm = input("\n> Confirmez-vous l'envoi de cette requête ? (o/N) : ").lower()
         if confirm == 'o':
             print("\n🚀 Processus d'assignation...")
-            success = api.grant_user_to_stream(user_id_to_add, selected_stream_id, api_role_value, owner_user_id)
+            success = api.grant_user_to_stream(user_id_to_add, selected_stream_id, api_role_value, final_owner_id)
             if success:
                 print(f"✅ Succès ! Les permissions du stream ont été mises à jour.")
             else:
