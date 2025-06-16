@@ -1,3 +1,121 @@
+
+# ... (dans la classe GraylogAPI) ...
+
+    def grant_user_to_stream(self, username, stream_id, role='viewer'):
+        """
+        Assigne un utilisateur à un stream avec un rôle spécifique.
+
+        :param username: Le nom d'utilisateur Graylog.
+        :param stream_id: L'ID du stream.
+        :param role: Le rôle à assigner ('viewer', 'manager', 'owner'). Par défaut 'viewer'.
+        :return: True en cas de succès, False sinon.
+        """
+        print(f"Tentative d'assignation de l'utilisateur '{username}' au stream '{stream_id}' avec le rôle '{role}'...")
+
+        # 1. Construire le GRN de l'entité à partager (le stream)
+        stream_grn = f"grn::::stream:{stream_id}"
+        endpoint = f"/authz/shares/entities/{stream_grn}"
+
+        # 2. Construire le GRN du bénéficiaire (l'utilisateur)
+        user_grn = f"grn::::user:{username}"
+
+        # 3. Préparer le payload de la requête POST
+        payload = {
+            "selected_grantee_capability": role,
+            "grantees": [user_grn]
+        }
+
+        # 4. Envoyer la requête POST
+        # Une réponse réussie est souvent un 204 No Content, _make_request gère cela.
+        # On ne s'attend pas à recevoir de JSON en retour, mais on vérifie si l'appel a réussi.
+        response = self._make_request('POST', endpoint, data=payload)
+
+        # _make_request retourne None en cas d'erreur HTTP.
+        # Si la requête réussit (même avec un code 204), elle ne retourne pas None.
+        if response is not None or (self.session.last_response and self.session.last_response.status_code == 204):
+            print(f"✅ Succès ! Utilisateur '{username}' a maintenant le rôle '{role}' sur le stream '{stream_id}'.")
+            return True
+        else:
+            print(f"❌ Échec de l'assignation.")
+            return False
+
+# Petite modification dans _make_request pour stocker la dernière réponse
+# Ceci est utile pour vérifier les codes de statut comme 204 qui n'ont pas de corps JSON.
+# Remplacez votre méthode _make_request par celle-ci :
+
+    def _make_request(self, method, endpoint, params=None, data=None):
+        """Méthode privée pour effectuer des requêtes et gérer les erreurs."""
+        url = f"{self.base_url}{endpoint}"
+        try:
+            response = self.session.request(method, url, params=params, json=data)
+            self.session.last_response = response # Stocker la dernière réponse
+            response.raise_for_status()
+            
+            # Gérer le cas où la réponse est vide (ex: 204 No Content)
+            if response.status_code == 204:
+                return {} # Retourner un dict vide pour signifier le succès
+            
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            print(f"Erreur HTTP: {e.response.status_code} pour l'URL {url}")
+            print(f"Réponse: {e.response.text}")
+        except requests.exceptions.ConnectionError as e:
+            print(f"Erreur de connexion à l'URL {url}: {e}")
+        except requests.exceptions.RequestException as e:
+            print(f"Une erreur est survenue: {e}")
+        return None
+
+
+
+# ... (le reste du fichier, y compris la classe et la fonction main) ...
+
+def demonstrate_permission_grant(api_client):
+    """
+    Fonction pour démontrer l'assignation de permission.
+    ATTENTION : MODIFIE LES DONNÉES SUR VOTRE SERVEUR GRAYLOG.
+    """
+    print("\n" + "#"*50)
+    print("### DÉMONSTRATION DE L'ASSIGNATION DE PERMISSION ###")
+    print("#"*50)
+
+    # --- À MODIFIER AVEC VOS PROPRES VALEURS ---
+    target_username = "jdupont"  # L'utilisateur à qui donner la permission
+    # Remplacez par un ID de stream de votre instance Graylog
+    target_stream_id = "60a1c2d3e4f5a6b7c8d9e0f1" 
+    target_role = "viewer"       # Le rôle à donner : 'viewer', 'manager'
+    # --------------------------------------------
+
+    # Vérification simple que les valeurs ont été changées
+    if "jdupont" in target_username or "60a1c2d3e4f5a6b7c8d9e0f1" in target_stream_id:
+        print("\n⚠️ ATTENTION: Veuillez modifier les variables `target_username` et `target_stream_id`")
+        print("dans la fonction `demonstrate_permission_grant` avec des valeurs réelles de votre système.")
+        return
+
+    # Appel de la nouvelle méthode
+    api_client.grant_user_to_stream(
+        username=target_username,
+        stream_id=target_stream_id,
+        role=target_role
+    )
+
+
+if __name__ == "__main__":
+    api = GraylogAPI()
+    
+    # 1. On liste l'état actuel
+    main()
+
+    # 2. On exécute l'action d'écriture
+    # !! DÉCOMMENTEZ LA LIGNE CI-DESSOUS POUR TESTER L'ASSIGNATION !!
+    # demonstrate_permission_grant(api)
+
+    # 3. Optionnel : Relister les permissions pour voir le changement
+    # print("\n\n--- Vérification des permissions après l'assignation ---")
+    # main()
+
+
+
+
 import requests
 import configparser
 import json
