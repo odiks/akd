@@ -2,6 +2,7 @@ import requests
 import sys
 import os
 import configparser
+import json  # <--- IMPORTATION AJOUTÉE
 
 class GraylogAPI:
     """
@@ -71,7 +72,7 @@ class GraylogAPI:
         data = self._make_request('GET', endpoint)
         return data.get('grants', []) if data else []
 
-    # --- MÉTHODE CORRIGÉE ---
+    # --- MÉTHODE MISE À JOUR AVEC L'AFFICHAGE cURL ---
     def grant_user_to_stream(self, user_id, stream_id, role):
         """
         Assigne un utilisateur à un stream avec un rôle, en utilisant l'ID de l'utilisateur.
@@ -88,8 +89,6 @@ class GraylogAPI:
         
         print(f"   Permissions existantes trouvées: {len(new_permissions_payload)}")
         
-        # --- CHANGEMENT CLÉ ICI ---
-        # Construction du GRN avec l'ID de l'utilisateur, et non son username.
         user_grn = f"grn::::user:{user_id}"
         print(f"2. Ajout/Mise à jour de la permission '{role}' pour l'utilisateur avec ID '{user_id}' (GRN: {user_grn})")
         new_permissions_payload[user_grn] = role
@@ -101,20 +100,44 @@ class GraylogAPI:
         }
         
         print(f"3. Envoi du payload de mise à jour complet à l'API...")
+
+        # ===================================================================
+        # === NOUVEAU BLOC : GÉNÉRATION ET AFFICHAGE DE LA COMMANDE cURL ===
+        # ===================================================================
+        full_url = f"{self.base_url}{endpoint}"
         
+        # Formatage des headers
+        headers_str = " ".join([f"-H '{k}: {v}'" for k, v in self.session.headers.items()])
+        
+        # Formatage de l'authentification
+        auth_str = f"--user '{self.session.auth[0]}:{self.session.auth[1]}'"
+        
+        # Formatage du corps de la requête (payload JSON)
+        data_str = f"--data-raw '{json.dumps(final_payload)}'"
+        
+        # Assemblage de la commande finale
+        curl_command = f"curl -X POST {auth_str} {headers_str} '{full_url}' {data_str}"
+        
+        print("\n" + "="*70)
+        print("ÉQUIVALENT DE LA REQUÊTE EN COMMANDE cURL :")
+        print(curl_command)
+        print("="*70 + "\n")
+        # ===================================================================
+        # === FIN DU NOUVEAU BLOC                                         ===
+        # ===================================================================
+
+        # Envoi de la requête (le code existant reste inchangé)
         response = self._make_request('POST', endpoint, data=final_payload)
         
         return response is not None
+
 
 def clear_screen():
     """Efface l'écran du terminal."""
     os.system('cls' if os.name == 'nt' else 'clear')
 
-# --- FONCTION DE SÉLECTION MISE À JOUR ---
 def select_from_list(items, title, display_key):
-    """
-    Affiche une liste d'items, demande à l'utilisateur de choisir et retourne l'objet complet.
-    """
+    """Affiche une liste, demande un choix et retourne l'objet complet."""
     print(f"\n--- {title} ---")
     if not items:
         print("La liste est vide.")
@@ -133,7 +156,6 @@ def select_from_list(items, title, display_key):
                 return None
             choice_index = int(choice) - 1
             if 0 <= choice_index < len(items):
-                # Retourne l'objet dictionnaire complet, pas juste une clé
                 return items[choice_index]
             else:
                 print("Numéro invalide, veuillez réessayer.")
@@ -146,7 +168,7 @@ def main():
     """Fonction principale interactive."""
     clear_screen()
     print("="*50)
-    print("=== Outil d'Assignation de Permissions Graylog (v3 - Corrigé) ===")
+    print("=== Outil d'Assignation de Permissions Graylog (v4) ===")
     print("="*50)
 
     config_file = 'config.ini'
@@ -184,11 +206,8 @@ def main():
         if not selected_stream_obj: break
         selected_stream_id = selected_stream_obj['id']
         
-        # --- CHANGEMENT CLÉ ICI ---
-        # On récupère l'objet utilisateur complet
         selected_user_obj = select_from_list(users, "Liste des Utilisateurs", 'username')
         if not selected_user_obj: break
-        # On extrait l'ID pour l'API et le username pour l'affichage
         selected_user_id = selected_user_obj['id']
         selected_username_for_display = selected_user_obj['username']
         
@@ -205,13 +224,11 @@ def main():
         confirm = input("\n> Confirmez-vous cette assignation ? (o/N) : ").lower()
         if confirm == 'o':
             print("\n🚀 Processus d'assignation...")
-            # --- CHANGEMENT CLÉ ICI ---
-            # On passe l'ID de l'utilisateur à la méthode de l'API
             success = api.grant_user_to_stream(selected_user_id, selected_stream_id, selected_role)
             if success:
-                print(f"\n✅ Succès ! Les permissions du stream ont été mises à jour.")
+                print(f"✅ Succès ! Les permissions du stream ont été mises à jour.")
             else:
-                print(f"\n❌ Échec de l'assignation. Veuillez vérifier les logs d'erreur ci-dessus.")
+                print(f"❌ Échec de l'assignation. Veuillez vérifier les logs d'erreur ci-dessus.")
         else:
             print("Opération annulée.")
         
