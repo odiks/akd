@@ -2,7 +2,7 @@ import requests
 import sys
 import os
 import configparser
-import json  # <--- IMPORTATION AJOUTÉE
+import json
 
 class GraylogAPI:
     """
@@ -72,10 +72,10 @@ class GraylogAPI:
         data = self._make_request('GET', endpoint)
         return data.get('grants', []) if data else []
 
-    # --- MÉTHODE MISE À JOUR AVEC L'AFFICHAGE cURL ---
-    def grant_user_to_stream(self, user_id, stream_id, role):
+    # --- MÉTHODE FINALE ET CORRIGÉE ---
+    def grant_user_to_stream(self, user_id, stream_id, role, creator_user_id):
         """
-        Assigne un utilisateur à un stream avec un rôle, en utilisant l'ID de l'utilisateur.
+        Assigne un utilisateur à un stream, en garantissant que le créateur du stream reste propriétaire.
         """
         print("\n1. Récupération des permissions actuelles du stream...")
         current_permissions = self.get_specific_stream_permissions(stream_id)
@@ -89,55 +89,47 @@ class GraylogAPI:
         
         print(f"   Permissions existantes trouvées: {len(new_permissions_payload)}")
         
-        user_grn = f"grn::::user:{user_id}"
-        print(f"2. Ajout/Mise à jour de la permission '{role}' pour l'utilisateur avec ID '{user_id}' (GRN: {user_grn})")
-        new_permissions_payload[user_grn] = role
+        # --- CHANGEMENT CLÉ 1 : GARANTIR LA PRÉSENCE DU PROPRIÉTAIRE ---
+        print("2. Vérification et application du rôle 'owner' pour le créateur du stream...")
+        owner_grn = f"grn::::user:{creator_user_id}"
+        new_permissions_payload[owner_grn] = "owner"
         
+        # --- CHANGEMENT CLÉ 2 : AJOUTER LE NOUVEL UTILISATEUR ---
+        user_grn = f"grn::::user:{user_id}"
+        # On ne donne la permission que si l'utilisateur n'est pas le propriétaire lui-même
+        if user_id != creator_user_id:
+            print(f"3. Ajout/Mise à jour de la permission '{role}' pour l'utilisateur ID '{user_id}'")
+            new_permissions_payload[user_grn] = role
+        else:
+            print(f"3. L'utilisateur sélectionné est le propriétaire. Son rôle est déjà 'owner'.")
+
         stream_grn = f"grn::::stream:{stream_id}"
         endpoint = f"/authz/shares/entities/{stream_grn}"
         final_payload = {
             "selected_grantee_capabilities": new_permissions_payload
         }
         
-        print(f"3. Envoi du payload de mise à jour complet à l'API...")
+        print(f"4. Envoi du payload de mise à jour complet à l'API...")
 
-        # ===================================================================
-        # === NOUVEAU BLOC : GÉNÉRATION ET AFFICHAGE DE LA COMMANDE cURL ===
-        # ===================================================================
         full_url = f"{self.base_url}{endpoint}"
-        
-        # Formatage des headers
         headers_str = " ".join([f"-H '{k}: {v}'" for k, v in self.session.headers.items()])
-        
-        # Formatage de l'authentification
         auth_str = f"--user '{self.session.auth[0]}:{self.session.auth[1]}'"
-        
-        # Formatage du corps de la requête (payload JSON)
         data_str = f"--data-raw '{json.dumps(final_payload)}'"
-        
-        # Assemblage de la commande finale
         curl_command = f"curl -X POST {auth_str} {headers_str} '{full_url}' {data_str}"
         
         print("\n" + "="*70)
         print("ÉQUIVALENT DE LA REQUÊTE EN COMMANDE cURL :")
         print(curl_command)
         print("="*70 + "\n")
-        # ===================================================================
-        # === FIN DU NOUVEAU BLOC                                         ===
-        # ===================================================================
-
-        # Envoi de la requête (le code existant reste inchangé)
+        
         response = self._make_request('POST', endpoint, data=final_payload)
         
         return response is not None
 
-
 def clear_screen():
-    """Efface l'écran du terminal."""
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def select_from_list(items, title, display_key):
-    """Affiche une liste, demande un choix et retourne l'objet complet."""
     print(f"\n--- {title} ---")
     if not items:
         print("La liste est vide.")
@@ -168,7 +160,7 @@ def main():
     """Fonction principale interactive."""
     clear_screen()
     print("="*50)
-    print("=== Outil d'Assignation de Permissions Graylog (v4) ===")
+    print("=== Outil d'Assignation de Permissions Graylog (v5) ===")
     print("="*50)
 
     config_file = 'config.ini'
@@ -185,7 +177,7 @@ def main():
         if not graylog_url or not graylog_token or "VOTRE_TOKEN_API_SECRET_ICI" in graylog_token:
              raise KeyError
     except KeyError:
-        print(f"❌ Erreur: Le fichier '{config_file}' doit contenir les clés 'url' et 'token' dans la section [graylog].")
+        print(f"❌ Erreur: Le fichier '{config_file}' doit contenir les clés 'url' et 'token'.")
         sys.exit(1)
 
     print(f"🔧 Connexion à l'instance Graylog : {graylog_url}")
@@ -196,7 +188,7 @@ def main():
     users = api.get_users()
 
     if streams is None or users is None:
-        print("\nImpossible de récupérer les données de base. Vérifiez l'URL et le token dans votre config.ini.")
+        print("\nImpossible de récupérer les données de base.")
         sys.exit(1)
 
     clear_screen()
@@ -205,6 +197,11 @@ def main():
         selected_stream_obj = select_from_list(streams, "Liste des Streams", 'title')
         if not selected_stream_obj: break
         selected_stream_id = selected_stream_obj['id']
+        # --- CHANGEMENT CLÉ 3 : RÉCUPÉRER L'ID DU CRÉATEUR ---
+        creator_user_id = selected_stream_obj.get('creator_user_id')
+        if not creator_user_id:
+            print(f"❌ Erreur: Impossible de trouver l'ID du créateur pour le stream '{selected_stream_id}'. Abandon.")
+            continue # Passe à l'itération suivante de la boucle
         
         selected_user_obj = select_from_list(users, "Liste des Utilisateurs", 'username')
         if not selected_user_obj: break
@@ -220,11 +217,13 @@ def main():
         print(f"  Stream     : {selected_stream_obj['title']} (ID: {selected_stream_id})")
         print(f"  Utilisateur: {selected_username_for_display} (ID: {selected_user_id})")
         print(f"  Rôle       : {selected_role}")
+        print(f"  Propriétaire: ID {creator_user_id} (sera inclus dans la requête)")
         
         confirm = input("\n> Confirmez-vous cette assignation ? (o/N) : ").lower()
         if confirm == 'o':
             print("\n🚀 Processus d'assignation...")
-            success = api.grant_user_to_stream(selected_user_id, selected_stream_id, selected_role)
+            # --- CHANGEMENT CLÉ 4 : PASSER L'ID DU CRÉATEUR À L'API ---
+            success = api.grant_user_to_stream(selected_user_id, selected_stream_id, selected_role, creator_user_id)
             if success:
                 print(f"✅ Succès ! Les permissions du stream ont été mises à jour.")
             else:
