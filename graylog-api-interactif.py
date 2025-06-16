@@ -10,7 +10,6 @@ class GraylogAPI:
     Gère l'authentification et les appels API de manière robuste.
     """
     def __init__(self, base_url, token):
-        """Initialise le client API avec l'URL et le token."""
         self.base_url = base_url.rstrip('/')
         self.session = requests.Session()
         self.session.headers.update({
@@ -22,7 +21,6 @@ class GraylogAPI:
         self.last_response = None
 
     def _make_request(self, method, endpoint, params=None, data=None):
-        """Méthode privée pour effectuer les requêtes et gérer les erreurs communes."""
         url = f"{self.base_url}{endpoint}"
         try:
             response = self.session.request(method, url, params=params, json=data)
@@ -41,7 +39,6 @@ class GraylogAPI:
         return None
 
     def _get_paginated_results(self, endpoint, key_name):
-        """Récupère toutes les pages d'un résultat paginé."""
         all_items = []
         page = 1
         per_page = 50
@@ -57,25 +54,25 @@ class GraylogAPI:
         return all_items
 
     def get_streams(self):
-        """Récupère la liste de tous les streams."""
         data = self._make_request('GET', '/streams')
         return data.get('streams', []) if data else None
 
     def get_users(self):
-        """Récupère la liste de tous les utilisateurs."""
         return self._get_paginated_results('/users', 'users')
 
     def get_specific_stream_permissions(self, stream_id):
-        """Récupère les permissions pour un seul stream."""
         stream_grn = f"grn::::stream:{stream_id}"
         endpoint = f"/authz/shares/entities/{stream_grn}"
         data = self._make_request('GET', endpoint)
         return data.get('grants', []) if data else []
 
-    # --- MÉTHODE FINALE ET CORRIGÉE ---
-    def grant_user_to_stream(self, user_id, stream_id, role, creator_user_id):
+    def grant_user_to_stream(self, user_id_to_add, stream_id, role, owner_user_id):
         """
         Assigne un utilisateur à un stream, en garantissant que le créateur du stream reste propriétaire.
+        :param user_id_to_add: L'ID de l'utilisateur à qui donner la permission.
+        :param stream_id: L'ID du stream concerné.
+        :param role: Le rôle à assigner ('viewer', 'manager').
+        :param owner_user_id: L'ID du créateur/propriétaire du stream.
         """
         print("\n1. Récupération des permissions actuelles du stream...")
         current_permissions = self.get_specific_stream_permissions(stream_id)
@@ -89,19 +86,18 @@ class GraylogAPI:
         
         print(f"   Permissions existantes trouvées: {len(new_permissions_payload)}")
         
-        # --- CHANGEMENT CLÉ 1 : GARANTIR LA PRÉSENCE DU PROPRIÉTAIRE ---
-        print("2. Vérification et application du rôle 'owner' pour le créateur du stream...")
-        owner_grn = f"grn::::user:{creator_user_id}"
+        print("2. Vérification et application du rôle 'owner' pour le propriétaire du stream...")
+        # Construction du GRN du propriétaire en utilisant son ID (owner_user_id)
+        owner_grn = f"grn::::user:{owner_user_id}"
         new_permissions_payload[owner_grn] = "owner"
         
-        # --- CHANGEMENT CLÉ 2 : AJOUTER LE NOUVEL UTILISATEUR ---
-        user_grn = f"grn::::user:{user_id}"
-        # On ne donne la permission que si l'utilisateur n'est pas le propriétaire lui-même
-        if user_id != creator_user_id:
-            print(f"3. Ajout/Mise à jour de la permission '{role}' pour l'utilisateur ID '{user_id}'")
-            new_permissions_payload[user_grn] = role
+        # Construction du GRN de l'utilisateur à ajouter en utilisant son ID (user_id_to_add)
+        user_to_add_grn = f"grn::::user:{user_id_to_add}"
+        if user_id_to_add != owner_user_id:
+            print(f"3. Ajout/Mise à jour de la permission '{role}' pour l'utilisateur ID '{user_id_to_add}'")
+            new_permissions_payload[user_to_add_grn] = role
         else:
-            print(f"3. L'utilisateur sélectionné est le propriétaire. Son rôle est déjà 'owner'.")
+            print(f"3. L'utilisateur sélectionné est déjà le propriétaire. Son rôle 'owner' est garanti.")
 
         stream_grn = f"grn::::stream:{stream_id}"
         endpoint = f"/authz/shares/entities/{stream_grn}"
@@ -134,7 +130,6 @@ def select_from_list(items, title, display_key):
     if not items:
         print("La liste est vide.")
         return None
-
     for i, item in enumerate(items):
         display_value = item.get(display_key)
         if display_key == 'username' and 'full_name' in item and item['full_name']:
@@ -157,10 +152,9 @@ def select_from_list(items, title, display_key):
             return None
 
 def main():
-    """Fonction principale interactive."""
     clear_screen()
     print("="*50)
-    print("=== Outil d'Assignation de Permissions Graylog (v5) ===")
+    print("=== Outil d'Assignation de Permissions Graylog (Final) ===")
     print("="*50)
 
     config_file = 'config.ini'
@@ -170,7 +164,6 @@ def main():
         sys.exit(1)
         
     config.read(config_file)
-    
     try:
         graylog_url = config['graylog']['url']
         graylog_token = config['graylog']['token']
@@ -197,16 +190,17 @@ def main():
         selected_stream_obj = select_from_list(streams, "Liste des Streams", 'title')
         if not selected_stream_obj: break
         selected_stream_id = selected_stream_obj['id']
-        # --- CHANGEMENT CLÉ 3 : RÉCUPÉRER L'ID DU CRÉATEUR ---
-        creator_user_id = selected_stream_obj.get('creator_user_id')
-        if not creator_user_id:
-            print(f"❌ Erreur: Impossible de trouver l'ID du créateur pour le stream '{selected_stream_id}'. Abandon.")
-            continue # Passe à l'itération suivante de la boucle
+        
+        # La clé 'creator_user_id' de l'API retourne l'ID de l'utilisateur propriétaire
+        owner_user_id = selected_stream_obj.get('creator_user_id')
+        if not owner_user_id:
+            print(f"❌ Erreur: Impossible de trouver l'ID du propriétaire pour le stream '{selected_stream_id}'.")
+            continue
         
         selected_user_obj = select_from_list(users, "Liste des Utilisateurs", 'username')
         if not selected_user_obj: break
-        selected_user_id = selected_user_obj['id']
-        selected_username_for_display = selected_user_obj['username']
+        user_id_to_add = selected_user_obj['id']
+        username_for_display = selected_user_obj['username']
         
         roles_obj = [{'role': r} for r in ['viewer', 'manager']]
         selected_role_obj = select_from_list(roles_obj, "Rôle à assigner", 'role')
@@ -214,20 +208,20 @@ def main():
         selected_role = selected_role_obj['role']
 
         print("\n--- RÉCAPITULATIF ---")
-        print(f"  Stream     : {selected_stream_obj['title']} (ID: {selected_stream_id})")
-        print(f"  Utilisateur: {selected_username_for_display} (ID: {selected_user_id})")
-        print(f"  Rôle       : {selected_role}")
-        print(f"  Propriétaire: ID {creator_user_id} (sera inclus dans la requête)")
+        print(f"  Stream       : {selected_stream_obj['title']} (ID: {selected_stream_id})")
+        print(f"  Utilisateur à ajouter: {username_for_display} (ID: {user_id_to_add})")
+        print(f"  Rôle à donner: {selected_role}")
+        print(f"  Propriétaire : Utilisateur avec ID {owner_user_id} (son rôle 'owner' sera garanti)")
         
         confirm = input("\n> Confirmez-vous cette assignation ? (o/N) : ").lower()
         if confirm == 'o':
             print("\n🚀 Processus d'assignation...")
-            # --- CHANGEMENT CLÉ 4 : PASSER L'ID DU CRÉATEUR À L'API ---
-            success = api.grant_user_to_stream(selected_user_id, selected_stream_id, selected_role, creator_user_id)
+            # On passe bien l'ID de l'utilisateur à ajouter ET l'ID du propriétaire
+            success = api.grant_user_to_stream(user_id_to_add, selected_stream_id, selected_role, owner_user_id)
             if success:
                 print(f"✅ Succès ! Les permissions du stream ont été mises à jour.")
             else:
-                print(f"❌ Échec de l'assignation. Veuillez vérifier les logs d'erreur ci-dessus.")
+                print(f"❌ Échec de l'assignation.")
         else:
             print("Opération annulée.")
         
