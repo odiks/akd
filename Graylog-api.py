@@ -2,6 +2,203 @@ import requests
 import configparser
 import json
 import sys
+from collections import defaultdict
+
+class GraylogAPI:
+    """
+    Classe pour interagir avec l'API de Graylog.
+    Gère l'authentification, la pagination et les appels API de base.
+    """
+    def __init__(self, config_file='config.ini'):
+        """
+        Initialise le client API en lisant le fichier de configuration.
+        """
+        config = configparser.ConfigParser()
+        config.read(config_file)
+
+        try:
+            self.base_url = config['graylog']['url']
+            self.token = config['graylog']['token']
+        except KeyError:
+            print(f"Erreur: Assurez-vous que le fichier '{config_file}' existe et contient une section [graylog] avec 'url' et 'token'.")
+            sys.exit(1)
+
+        self.session = requests.Session()
+        self.session.headers.update({
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Requested-By': 'PythonGraylogClient'
+        })
+        self.session.auth = (self.token, 'token')
+
+    def _make_request(self, method, endpoint, params=None, data=None):
+        """Méthode privée pour effectuer des requêtes et gérer les erreurs."""
+        url = f"{self.base_url}{endpoint}"
+        try:
+            response = self.session.request(method, url, params=params, json=data)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            print(f"Erreur HTTP: {e.response.status_code} pour l'URL {url}")
+            print(f"Réponse: {e.response.text}")
+        except requests.exceptions.ConnectionError as e:
+            print(f"Erreur de connexion à l'URL {url}: {e}")
+        except requests.exceptions.RequestException as e:
+            print(f"Une erreur est survenue: {e}")
+        return None
+
+    def _get_paginated_results(self, endpoint, key_name):
+        """Récupère toutes les pages d'un résultat paginé."""
+        all_items = []
+        page = 1
+        per_page = 50
+        
+        while True:
+            params = {'page': page, 'per_page': per_page}
+            data = self._make_request('GET', endpoint, params=params)
+            
+            if not data or not data.get(key_name):
+                break
+                
+            items = data[key_name]
+            all_items.extend(items)
+            
+            if len(items) < per_page:
+                break
+                
+            page += 1
+            
+        return all_items
+
+    def get_streams(self):
+        """Récupère la liste de tous les streams."""
+        print("Récupération de la liste des streams...")
+        data = self._make_request('GET', '/streams')
+        return data.get('streams', []) if data else []
+
+    def get_users(self):
+        """Récupère la liste de tous les utilisateurs."""
+        print("Récupération de la liste des utilisateurs...")
+        return self._get_paginated_results('/users', 'users')
+
+    # --- NOUVELLE MÉTHODE ---
+    def get_all_permissions(self):
+        """
+        Récupère un aperçu de toutes les permissions ("grants") dans le système.
+        """
+        print("Récupération de toutes les permissions du système...")
+        # Cet endpoint peut être paginé sur les grosses instances de Graylog
+        return self._get_paginated_results('/authz/grants-overview', 'grants')
+
+
+def main():
+    """Fonction principale du script."""
+    api = GraylogAPI()
+
+    # --- 1. Lister les streams ---
+    streams = api.get_streams()
+    if not streams:
+        print("Aucun stream trouvé ou erreur lors de la récupération.")
+        return
+
+    print("\n" + "="*50)
+    print(f"Total des streams trouvés : {len(streams)}")
+    print("="*50)
+    for stream in streams:
+        print(f"- ID: {stream['id']} | Titre: {stream['title']}")
+
+    # --- 2. Lister les utilisateurs ---
+    users = api.get_users()
+    if not users:
+        print("Aucun utilisateur trouvé ou erreur lors de la récupération.")
+        
+    print("\n" + "="*50)
+    print(f"Total des utilisateurs trouvés : {len(users)}")
+    print("="*50)
+    for user in users:
+        print(f"- Username: {user['username']} | Full Name: {user['full_name']} | Email: {user['email']}")
+
+    # --- 3. Lister les permissions par stream (LOGIQUE CORRIGÉE) ---
+    all_permissions = api.get_all_permissions()
+    
+    # On pré-traite les permissions pour les organiser par stream
+    stream_permissions = defaultdict(list)
+    if all_permissions:
+        for perm in all_permissions:
+            target_grn = perm.get('target')
+            # On ne garde que les permissions qui concernent un stream
+            if target_grn and target_grn.startswith('grn::::stream:'):
+                # On extrait l'ID du stream depuis le GRN
+                stream_id = target_grn.split(':')[-1]
+                stream_permissions[stream_id].append(perm)
+
+    print("\n" + "="*50)
+    print("Permissions sur les Streams")
+    print("="*50)
+    for stream in streams:
+        print(f"\n--- Stream : '{stream['title']}' (ID: {stream['id']}) ---")
+        # On récupère les permissions pré-traitées pour ce stream
+        permissions_for_this_stream = stream_permissions.get(stream['id'])
+        
+        if permissions_for_this_stream:
+            for perm in permissions_for_this_stream:
+                grantee = perm['grantee']
+                capability = perm['capability']
+                print(f"  -> Rôle '{capability}' accordé à '{grantee}'")
+        else:
+            # On vérifie si l'utilisateur qui a créé le stream a la permission "owner"
+            # qui n'apparaît pas toujours dans grants-overview.
+            owner_user_id = stream.get('creator_user_id')
+            if owner_user_id:
+                 print(f"  -> Rôle 'Owner' (implicite) accordé à l'utilisateur créateur (ID: {owner_user_id})")
+            else:
+                print("  -> Aucune permission explicite trouvée pour ce stream.")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import requests
+import configparser
+import json
+import sys
 
 class GraylogAPI:
     """
