@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import requests
+import os
+import sys
+
+# --- Configuration ---
+GRAYLOG_BASE_URL = os.getenv("GRAYLOG_URL", "http://your-graylog-instance:9000")
+API_TOKEN = os.getenv("GRAYLOG_API_TOKEN")
+
+# --- Fonctions API (réutilisées du script précédent) ---
+
+def _make_api_get_request(endpoint: str) -> dict | None:
+    """
+    Fonction d'aide pour effectuer une requête GET authentifiée à l'API Graylog.
+    """
+    if not API_TOKEN:
+        print("Erreur: La variable d'environnement GRAYLOG_API_TOKEN n'est pas définie.", file=sys.stderr)
+        return None
+
+    api_url = f"{GRAYLOG_BASE_URL}{endpoint}"
+    headers = {
+        'Accept': 'application/json',
+        'X-Requested-By': 'python-script-find-user-id'
+    }
+
+    try:
+        response = requests.get(api_url, headers=headers, auth=(API_TOKEN, 'token'))
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as err:
+        print(f"❌ Erreur de connexion ou de requête à '{api_url}': {err}", file=sys.stderr)
+        return None
+
+def create_user_map() -> dict[str, str] | None:
+    """
+    Récupère tous les utilisateurs et les transforme en un dictionnaire (mapping)
+    de type {username: user_id}.
+
+    Returns:
+        dict[str, str] | None: Le dictionnaire de mapping en cas de succès, sinon None.
+    """
+    print("⏳ Récupération et création du mapping des utilisateurs depuis Graylog...")
+    response_data = _make_api_get_request("/api/users")
+    
+    if not response_data or 'users' not in response_data:
+        print("❌ Impossible de récupérer la liste des utilisateurs.", file=sys.stderr)
+        return None
+
+    # On utilise une compréhension de dictionnaire pour créer le mapping efficacement
+    user_map = {user['username']: user['id'] for user in response_data['users']}
+    
+    print(f"✅ Mapping créé avec succès pour {len(user_map)} utilisateurs.")
+    return user_map
+
+# --- Nouvelle fonction pour le mode interactif ---
+
+def start_interactive_lookup(user_map: dict[str, str]):
+    """
+    Lance une session interactive pour rechercher un user_id à partir d'un username.
+
+    Args:
+        user_map (dict[str, str]): Le dictionnaire contenant le mapping username -> user_id.
+    """
+    print("\n" + "="*40)
+    print("   Mode interactif : Recherche d'ID utilisateur")
+    print("="*40)
+    print("Entrez un nom d'utilisateur pour trouver son ID.")
+    print("Tapez 'exit' ou 'quit' pour quitter le programme.")
+
+    while True:
+        # Demande à l'utilisateur de saisir un nom
+        # .strip() supprime les espaces inutiles au début et à la fin
+        username_to_find = input("\nEntrez le username à rechercher > ").strip()
+
+        # Condition de sortie (insensible à la casse)
+        if username_to_find.lower() in ['exit', 'quit']:
+            print("👋 Au revoir !")
+            break
+
+        if not username_to_find:
+            continue
+
+        # Recherche de l'ID dans le dictionnaire.
+        # user_map.get(key) est plus sûr que user_map[key] car il retourne None si la clé n'existe pas,
+        # au lieu de lever une erreur.
+        user_id = user_map.get(username_to_find)
+
+        if user_id:
+            print(f"  ✅ TROUVÉ ! L'ID de l'utilisateur '{username_to_find}' est : {user_id}")
+        else:
+            print(f"  ❌ NON TROUVÉ. L'utilisateur '{username_to_find}' n'existe pas dans Graylog.")
+            # Suggestion bonus : on pourrait chercher des noms proches, mais restons simple pour l'instant.
+
+
+# --- Point d'entrée du script ---
+if __name__ == "__main__":
+    if "your-graylog-instance" in GRAYLOG_BASE_URL:
+        print("Veuillez configurer la variable d'environnement GRAYLOG_URL.", file=sys.stderr)
+        sys.exit(1)
+    
+    if not API_TOKEN:
+        print("Veuillez configurer la variable d'environnement GRAYLOG_API_TOKEN.", file=sys.stderr)
+        sys.exit(1)
+
+    # 1. Créer le mapping au démarrage
+    users_mapping = create_user_map()
+
+    # 2. Si le mapping a été créé, lancer le mode interactif
+    if users_mapping:
+        start_interactive_lookup(users_mapping)
+    else:
+        print("Le programme ne peut pas continuer sans le mapping des utilisateurs.", file=sys.stderr)
+        sys.exit(1)
