@@ -11,7 +11,7 @@ import sys
 GRAYLOG_BASE_URL = os.getenv("GRAYLOG_URL", "http://GRAYLOG-URL:9000")
 API_TOKEN = os.getenv("GRAYLOG_API_TOKEN")
 
-def assign_user_to_stream(stream_id: str, owner_user_id: str, new_user_id: str, new_user_role: str = "view"):
+def assign_user_to_stream(stream_id: str, owner_user_id: str, users_to_add: str):
     """
     Assigne un nouvel utilisateur à un stream Graylog avec un rôle spécifique.
 
@@ -35,7 +35,7 @@ def assign_user_to_stream(stream_id: str, owner_user_id: str, new_user_id: str, 
     # Construction de l'URL de l'API pour la ressource (le stream)
     # Le format est /api/authz/shares/entities/{entity_grn}
     entity_grn = f"grn::::stream:{stream_id}"
-    api_url = f"{GRAYLOG_BASE_URL}/api/authz/shares/entities/{entity_grn}"
+    api_url = f"{GRAYLOG_BASE_URL}/authz/shares/entities/{entity_grn}"
 
     # Préparation des headers de la requête HTTP
     headers = {
@@ -47,19 +47,13 @@ def assign_user_to_stream(stream_id: str, owner_user_id: str, new_user_id: str, 
     # Préparation du payload (le corps de la requête)
     # C'est un dictionnaire Python qui sera automatiquement converti en JSON par la bibliothèque `requests`.
     # Nous incluons le propriétaire existant et le nouvel utilisateur.
-    payload = {
-        "selected_grantee_capabilities": {
-            f"grn::::user:{owner_user_id}": "own",
-            f"grn::::user:{new_user_id}": new_user_role
-        }
-    }
+    # payload = {
+    #     "selected_grantee_capabilities": {
+   #          f"grn::::user:{owner_user_id}": "own",
+   #          f"grn::::user:{new_user_id}": new_user_role
+     #    }
+   #  }
 
-
-
-
-
-
-    
     # 1. Initialiser le dictionnaire des permissions avec le propriétaire
     capabilities_dict = {
         f"grn::::user:{owner_user_id}": "own"
@@ -79,23 +73,13 @@ def assign_user_to_stream(stream_id: str, owner_user_id: str, new_user_id: str, 
         "selected_grantee_capabilities": capabilities_dict
     }
     
-    # Pour vérifier le résultat, vous pouvez l'afficher
-    import json
-    print(json.dumps(payload, indent=2))
-
-
-
-
-
-
-
-    print(f"Tentative d'assignation de l'utilisateur '{new_user_id}' au stream '{stream_id}' avec le rôle '{new_user_role}'...")
+    print(f"Tentative d'assignation de l'utilisateur '{users_to_add}' au stream '{stream_id}' avec le rôle ...")
     
     try:
         # La commande curl sans spécification de méthode (-X) mais avec des données (--data-raw)
         # est généralement un POST. Cependant, pour mettre à jour une ressource existante,
         # l'API REST de Graylog utilise une requête PUT pour cet endpoint.
-        response = requests.put(
+        response = requests.post(
             api_url,
             headers=headers,
             json=payload,  # `json=` sérialise automatiquement le dictionnaire `payload` en JSON
@@ -127,31 +111,17 @@ if __name__ == "__main__":
     # Remplacez ces valeurs par celles qui correspondent à votre cas d'usage
     TARGET_STREAM_ID = "YOUR_STREAM_ID"
     OWNER_USER_ID = "ID_OF_THE_OWNER_USER"
-    NEW_USER_TO_ADD_ID = "ID_OF_THE_NEW_USER"
 
-    if "YOUR_STREAM_ID" in TARGET_STREAM_ID:
-        print("Veuillez éditer le script pour définir les variables TARGET_STREAM_ID, OWNER_USER_ID, et NEW_USER_TO_ADD_ID.")
-    else:
-        assign_user_to_stream(TARGET_STREAM_ID, OWNER_USER_ID, NEW_USER_TO_ADD_ID)
-
-
-
-
-
-
-if __name__ == "__main__":
-    # --- Configuration pour un test ---
-    TARGET_STREAM_ID = "60a7d8c2c1a8e63b3f4b1e9a" # Remplacez par un vrai ID
-    OWNER_USER_ID = "admin" # Remplacez par l'ID du propriétaire
 
     # Voici comment définir la liste des utilisateurs à ajouter
-    # C'est une liste de dictionnaires. Chaque dictionnaire a une clé 'id' et 'role'.
+    # C'est une liste de dictionnaires. Chaque dictionnaire a une clé 'id' et 'role
     USERS_TO_SET = [
         {'id': 'jdoe', 'role': 'view'},
         {'id': 'msmith', 'role': 'edit'},
         {'id': 's-api', 'role': 'reader'}  # 'reader' est un alias commun pour 'view'
     ]
 
-    # Appel de la fonction avec les variables définies
-    # (en supposant que votre fonction s'appelle 'set_stream_permissions')
-    set_stream_permissions(TARGET_STREAM_ID, OWNER_USER_ID, USERS_TO_SET)
+    if "YOUR_STREAM_ID" in TARGET_STREAM_ID:
+        print("Veuillez éditer le script pour définir les variables TARGET_STREAM_ID, OWNER_USER_ID, et .")
+    else:
+        assign_user_to_stream(TARGET_STREAM_ID, OWNER_USER_ID, USERS_TO_SET)
