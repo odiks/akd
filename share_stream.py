@@ -54,6 +54,41 @@ def assign_user_to_stream(stream_id: str, owner_user_id: str, new_user_id: str, 
         }
     }
 
+
+
+
+
+
+    
+    # 1. Initialiser le dictionnaire des permissions avec le propriétaire
+    capabilities_dict = {
+        f"grn::::user:{owner_user_id}": "own"
+    }
+    
+    # 2. Parcourir la liste des utilisateurs et les ajouter au dictionnaire
+    for user in users_to_add:
+        user_id = user['id']
+        user_role = user['role']
+        # Construire le GRN de l'utilisateur
+        user_grn = f"grn::::user:{user_id}"
+        # Ajouter la paire clé/valeur au dictionnaire
+        capabilities_dict[user_grn] = user_role
+    
+    # 3. Construire le payload final
+    payload = {
+        "selected_grantee_capabilities": capabilities_dict
+    }
+    
+    # Pour vérifier le résultat, vous pouvez l'afficher
+    import json
+    print(json.dumps(payload, indent=2))
+
+
+
+
+
+
+
     print(f"Tentative d'assignation de l'utilisateur '{new_user_id}' au stream '{stream_id}' avec le rôle '{new_user_role}'...")
     
     try:
@@ -98,3 +133,25 @@ if __name__ == "__main__":
         print("Veuillez éditer le script pour définir les variables TARGET_STREAM_ID, OWNER_USER_ID, et NEW_USER_TO_ADD_ID.")
     else:
         assign_user_to_stream(TARGET_STREAM_ID, OWNER_USER_ID, NEW_USER_TO_ADD_ID)
+
+
+
+
+
+
+if __name__ == "__main__":
+    # --- Configuration pour un test ---
+    TARGET_STREAM_ID = "60a7d8c2c1a8e63b3f4b1e9a" # Remplacez par un vrai ID
+    OWNER_USER_ID = "admin" # Remplacez par l'ID du propriétaire
+
+    # Voici comment définir la liste des utilisateurs à ajouter
+    # C'est une liste de dictionnaires. Chaque dictionnaire a une clé 'id' et 'role'.
+    USERS_TO_SET = [
+        {'id': 'jdoe', 'role': 'view'},
+        {'id': 'msmith', 'role': 'edit'},
+        {'id': 's-api', 'role': 'reader'}  # 'reader' est un alias commun pour 'view'
+    ]
+
+    # Appel de la fonction avec les variables définies
+    # (en supposant que votre fonction s'appelle 'set_stream_permissions')
+    set_stream_permissions(TARGET_STREAM_ID, OWNER_USER_ID, USERS_TO_SET)
