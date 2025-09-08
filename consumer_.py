@@ -12,7 +12,7 @@ from confluent_kafka import Consumer, KafkaException
 # À MODIFIER SELON VOTRE ENVIRONNEMENT KAFKA
 KAFKA_BROKERS = 'localhost:9093'  # Adresse et PORT SSL de votre broker
 KAFKA_TOPIC = 'file-transfers'
-KAFKA_CONSUMER_GROUP = 'file-transfer-group-1'
+KAFKA_CONSUMER_GROUP = 'file-transfer-group-1' # Changez-le si vous voulez relire depuis le début
 OUTPUT_DIRECTORY = "output_files"  # Les fichiers reçus seront stockés ici
 
 # CHEMINS VERS VOS CERTIFICATS SSL
@@ -55,20 +55,24 @@ class FileReassembler:
         temp_path = self.output_dir / f"{filename}.{transfer_id}.part"
         
         try:
-            # Allouer l'espace disque immédiatement pour éviter les problèmes
             with open(temp_path, "wb") as f:
-                f.truncate(metadata['size_bytes'])
+                if metadata['size_bytes'] > 0:
+                    f.truncate(metadata['size_bytes'])
 
             self.active_transfers[transfer_id] = {
                 "metadata": metadata,
                 "temp_path": temp_path,
                 "temp_file_handle": open(temp_path, "r+b"),
                 "received_chunks": set(),
-                "total_chunks": metadata['total_chunks']
+                "total_chunks": metadata['total_chunks'],
+                # *** CORRECTION IMPORTANTE ***
+                # On stocke la taille de chunk fournie par le producer.
+                "chunk_size": metadata['chunk_size']
             }
             print(f"\n▶️  Démarrage du transfert pour '{filename}' (ID: {transfer_id})")
-        except IOError as e:
-            print(f"Erreur critique : Impossible de créer le fichier temporaire {temp_path}. Erreur : {e}")
+        except (IOError, KeyError) as e:
+            print(f"Erreur critique lors de l'initialisation du transfert {transfer_id}. "
+                  f"Le message de métadonnées est peut-être invalide (manque 'chunk_size'?). Erreur : {e}")
 
     def handle_chunk(self, transfer_id, data):
         """Écrit un chunk de données à sa position exacte dans le fichier temporaire."""
@@ -78,9 +82,11 @@ class FileReassembler:
         if chunk_index not in transfer['received_chunks']:
             try:
                 chunk_data = base64.b64decode(data['chunk_data_base64'])
-                offset = chunk_index * (transfer['metadata']['size_bytes'] // transfer['total_chunks']) if transfer['total_chunks'] > 1 else 0
                 
-                # Le seek est plus robuste si des chunks étaient traités dans le désordre
+                # *** CORRECTION IMPORTANTE ***
+                # On calcule l'offset avec la taille de chunk exacte, pas une moyenne.
+                offset = chunk_index * transfer['chunk_size']
+                
                 transfer['temp_file_handle'].seek(offset)
                 transfer['temp_file_handle'].write(chunk_data)
                 transfer['received_chunks'].add(chunk_index)
@@ -93,7 +99,7 @@ class FileReassembler:
 
     def handle_end(self, transfer_id, data):
         """Finalise, valide et nettoie un transfert."""
-        sys.stdout.write("\n") # Nouvelle ligne après la barre de progression
+        sys.stdout.write("\n")
         print(f"🏁 Fin de transfert reçue pour '{self.active_transfers[transfer_id]['metadata']['filename']}'. Validation en cours...")
         transfer = self.active_transfers[transfer_id]
         transfer['temp_file_handle'].close()
@@ -111,12 +117,18 @@ class FileReassembler:
         
         if hasher.hexdigest() != data['final_hash_sha256']:
             print(f"❌ ÉCHEC (Intégrité) : Le hash du fichier ne correspond pas.")
+            print(f"   Attendu  : {data['final_hash_sha256']}")
+            print(f"   Calculé : {hasher.hexdigest()}")
             os.remove(transfer['temp_path'])
             del self.active_transfers[transfer_id]
             return
 
         final_path = self.output_dir / transfer['metadata']['filename']
+        if final_path.exists():
+            print(f"Avertissement : Le fichier de destination '{final_path}' existe déjà. Il va être écrasé.")
+            os.remove(final_path)
         os.rename(transfer['temp_path'], final_path)
+        
         self.apply_metadata(final_path, transfer['metadata'])
         print(f"✅ SUCCÈS : Fichier '{final_path.name}' reconstruit et validé.")
         del self.active_transfers[transfer_id]
@@ -159,7 +171,7 @@ class FileReassembler:
                 if msg is None: continue
                 if msg.error():
                     if msg.error().code() != KafkaException._PARTITION_EOF:
-                        print(msg.error())
+                        print(f"Erreur Kafka : {msg.error()}")
                     continue
                 self.process_message(msg)
         except KeyboardInterrupt:
