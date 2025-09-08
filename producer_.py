@@ -82,6 +82,10 @@ def transfer_file(producer, topic, file_path, chunk_size=1024*512): # 512KB
     total_chunks = (metadata['size_bytes'] + chunk_size - 1) // chunk_size
     metadata['file_hash_sha256'] = file_hash
     metadata['total_chunks'] = total_chunks
+    
+    # *** CORRECTION IMPORTANTE ***
+    # Le producer doit informer le consumer de la taille des chunks qu'il utilise.
+    metadata['chunk_size'] = chunk_size
 
     start_message = {
         "message_type": "FILE_METADATA_START",
@@ -135,7 +139,8 @@ if __name__ == "__main__":
         'ssl.ca.location': SSL_CA_LOCATION,
         'ssl.certificate.location': SSL_CERT_LOCATION,
         'ssl.key.location': SSL_KEY_LOCATION,
-        'enable.idempotence': True # Garantit qu'un message n'est écrit qu'une seule fois
+        'enable.idempotence': True,
+        'compression.type': 'gzip' # Optionnel mais recommandé pour la performance
     }
     
     for path in [SSL_CA_LOCATION, SSL_CERT_LOCATION, SSL_KEY_LOCATION]:
