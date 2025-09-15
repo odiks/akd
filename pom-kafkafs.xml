@@ -20,7 +20,7 @@
     <javalin.version>6.1.6</javalin.version>
     <slf4j.version>2.0.12</slf4j.version>
     <grpc.version>1.64.0</grpc.version>
-    <!-- Property for protobuf-maven-plugin to detect OS -->
+    <!-- On définit manuellement le classifieur pour Windows -->
     <os.detected.classifier>windows-x86_64</os.detected.classifier>
   </properties>
   <dependencies>
@@ -94,14 +94,7 @@
   </dependencies>
 
   <build>
-    <extensions>
-      <!-- Extension needed for the os.detected.classifier property -->
-      <extension>
-        <groupId>kr.motd.maven</groupId>
-        <artifactId>os-maven-plugin</artifactId>
-        <version>1.7.1</version>
-      </extension>
-    </extensions>
+    <!-- La section <extensions> a été supprimée -->
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
