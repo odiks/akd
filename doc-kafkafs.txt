@@ -1,0 +1,157 @@
+Kafka File Transfer
+Ce projet fournit une solution robuste et sécurisée pour transférer des fichiers de toute taille via Apache Kafka. Il est composé d'un producteur (pour envoyer des fichiers) et d'un consommateur (pour les recevoir et les reconstruire), conçus pour être résilients, performants et exploitables en environnement de production.
+
+Table des Matières
+Fonctionnalités Clés
+Architecture
+Concepts de Sécurité
+Démarrage Rapide
+Prérequis
+Compilation
+Exécution
+Configuration
+Fichier producer.properties
+Fichier consumer.properties
+Modes d'Opération Spéciaux
+Mode de Débogage (JSON)
+Mode de Récupération d'Urgence
+Structure du Projet
+Améliorations Futures
+Fonctionnalités Clés
+✅ Support des Fichiers Volumineux : Les fichiers sont découpés en chunks et streamés, évitant de charger des fichiers entiers en mémoire.
+✅ Transfert Complet des Métadonnées : Conserve les permissions (POSIX & Windows ACLs), les timestamps, et les informations de propriétaire.
+✅ Intégrité des Données Garantie : Un hash cryptographique (SHA-256/384/512) du fichier complet est calculé et vérifié à la réception.
+✅ Confidentialité de Bout-en-Bout (Optionnel) : Chiffrement hybride robuste (RSA/AES-GCM) pour s'assurer que seul le destinataire peut lire les fichiers.
+✅ Compression des Données (Optionnel) : Compresse les chunks (Gzip, Snappy) pour réduire l'utilisation de la bande passante et du stockage.
+✅ Robustesse et Fiabilité : Conçu pour être résilient face aux pannes, avec des configurations de producteur idempotentes (acks=all).
+✅ Traçabilité : Logging structuré et détaillé incluant un ID de transfert unique (TID) pour suivre un fichier de bout en bout.
+✅ Reprise sur Sinistre : Un mode de récupération permet de reconstruire un fichier spécifique à partir des données présentes dans Kafka, même après une suppression locale.
+Architecture
+Le système suit un flux de données simple mais puissant, orchestré par Apache Kafka.
+
+Producteur -> [ Topic de Données Kafka ] -> Consommateur
+
+Producteur
+Le producteur est une application en ligne de commande qui prend un fichier en entrée et exécute les étapes suivantes :
+
+Génère un ID de Transfert unique (UUID).
+Lit toutes les métadonnées du fichier (taille, permissions, dates, etc.).
+Calcule le hash cryptographique du fichier complet pour garantir l'intégrité.
+Lit le fichier chunk par chunk pour ne pas saturer la mémoire.
+Pour chaque chunk :
+Le compresse (si activé).
+Le chiffre (si activé).
+Calcule son propre hash.
+Envoie chaque chunk sous forme de message à un topic Kafka. Le transferId est utilisé comme clé de message pour garantir que tous les chunks d'un même fichier arrivent sur la même partition, préservant ainsi leur ordre.
+Envoie un message final (sans données) contenant toutes les métadonnées de reconstruction (clés de chiffrement, etc.).
+Consommateur
+Le consommateur est un service longue durée qui écoute le topic Kafka :
+
+Il lit les messages et regroupe les chunks par transferId dans un répertoire de transit (staging) sur le disque.
+Lorsqu'il reçoit le message final et qu'il a collecté tous les chunks de données, il démarre la reconstruction :
+Il assemble les chunks dans l'ordre dans un fichier temporaire.
+Pendant l'assemblage, il déchiffre et décompresse chaque chunk si nécessaire.
+Une fois le fichier temporaire assemblé, il vérifie son intégrité en comparant son hash avec le hash original.
+Si l'intégrité est validée, il applique les métadonnées (permissions, timestamps) au fichier.
+Finalement, il déplace atomiquement le fichier temporaire vers sa destination finale, le rendant visible aux autres applications.
+Il nettoie le répertoire de transit.
+Concepts de Sécurité
+Principe	Statut	Mécanisme d'Implémentation
+Confidentialité	✅ Implémenté	Chiffrement de bout-en-bout (Hybride RSA-4096 / AES-256 GCM). Seul le destinataire avec la clé privée peut lire les données.
+Intégrité	✅ Implémenté	Hachage cryptographique (SHA-256 par défaut) du fichier complet, vérifié à la reconstruction.
+Authentification	🟡 Délégué à Kafka	L'application supporte l'authentification via SASL. Il est de la responsabilité de l'opérateur de configurer les ACLs Kafka.
+Autorisation	🟡 Délégué à Kafka	Les ACLs Kafka doivent être configurées en production pour restreindre l'accès en lecture/écriture aux topics et aux consumer groups.
+Démarrage Rapide
+Prérequis
+Java Development Kit (JDK) 11 ou supérieur.
+Apache Maven 3.6 ou supérieur.
+Un cluster Apache Kafka fonctionnel.
+Compilation
+Le projet utilise Maven. Pour compiler et créer un "fat jar" exécutable, exécutez la commande suivante à la racine du projet :
+
+code
+Bash
+mvn clean install
+Le JAR exécutable se trouvera dans le répertoire target/kafka-file-transfer-1.0.5.jar.
+
+Exécution
+Envoyer un fichier (Producteur)
+code
+Bash
+java -jar target/kafka-file-transfer-1.0.5.jar producer \
+  --config ./config/producer.properties \
+  /chemin/vers/mon_fichier.zip
+producer: Spécifie que nous lançons le producteur.
+--config: Chemin vers le fichier de configuration du producteur.
+Le dernier argument est le chemin vers le fichier à envoyer.
+Recevoir des fichiers (Consommateur)
+code
+Bash
+java -jar target/kafka-file-transfer-1.0.5.jar consumer \
+  --config ./config/consumer.properties \
+  --destination-dir /chemin/vers/repertoire_de_sortie
+consumer: Spécifie que nous lançons le consommateur.
+--config: Chemin vers le fichier de configuration du consommateur.
+--destination-dir: Le répertoire où les fichiers reconstruits seront sauvegardés.
+Configuration
+Fichier producer.properties
+Propriété	Description	Exemple
+bootstrap.servers	Adresses des brokers Kafka.	kafka1:9092,kafka2:9092
+topic.data	Le topic où les données des fichiers seront envoyées.	files-data-topic
+serialization.format	Format des messages. JSON pour le débogage, PROTOBUF pour la production.	JSON
+chunk.size	Taille de chaque chunk en octets.	1048576 (1 Mio)
+hash.algorithm	Algorithme de hash pour l'intégrité. Options: SHA-256, SHA-384, SHA-512.	SHA-256
+compression.algorithm	Algorithme de compression. Options: NONE, GZIP, SNAPPY.	GZIP
+encryption.enabled	Activer (true) ou désactiver (false) le chiffrement.	false
+encryption.consumer.public_key.path	Chemin vers la clé publique du consommateur (obligatoire si chiffrement activé).	security/consumer_public.pem
+Fichier consumer.properties
+Propriété	Description	Exemple
+bootstrap.servers	Adresses des brokers Kafka.	kafka1:9092
+group.id	L'ID du groupe de consommateurs. Essentiel pour la reprise sur erreur.	file-reconstructor-group
+topic.data	Le topic à écouter. Doit être le même que celui du producteur.	files-data-topic
+serialization.format	Format des messages. Doit correspondre à celui du producteur.	JSON
+staging.directory	Répertoire de stockage temporaire des chunks avant reconstruction.	/tmp/kafka-staging
+metadata.restore.permissions	Appliquer (true) ou non (false) les permissions au fichier reconstruit.	true
+metadata.restore.owner	Appliquer (true) ou non (false) le propriétaire/groupe.	false
+metadata.restore.timestamps	Appliquer (true) ou non (false) les dates de modification/accès.	true
+encryption.private_key.path	Chemin vers la clé privée du consommateur (obligatoire si chiffrement activé).	security/consumer_private.p8
+recovery.transfer.id	(Commenté par défaut) L'ID complet d'un transfert à récupérer.	65b7800b-c8d4-4699...
+Modes d'Opération Spéciaux
+Mode de Débogage (JSON)
+Pour inspecter les métadonnées envoyées dans Kafka et faciliter le débogage, vous pouvez basculer la sérialisation en JSON.
+
+Dans producer.properties, définissez : serialization.format=JSON.
+Dans consumer.properties, définissez : serialization.format=JSON.
+Vous pouvez maintenant utiliser des outils comme kafka-console-consumer pour voir les messages en clair dans le topic. N'oubliez pas de repasser en PROTOBUF pour la production afin de bénéficier de performances optimales.
+Mode de Récupération d'Urgence
+Si un fichier a été supprimé localement mais que ses données existent toujours dans Kafka (selon la politique de rétention), vous pouvez le récupérer.
+
+Trouvez l'ID de transfert complet du fichier (par exemple, dans les logs ou les métadonnées d'un message JSON).
+Ouvrez config/consumer.properties.
+Décommentez la ligne recovery.transfer.id et collez-y l'ID complet.
+Lancez le consommateur. Il va lire le topic depuis le début, collecter uniquement les chunks de ce transfert, le reconstruire, puis s'arrêter.
+Structure du Projet
+code
+Code
+.
+├── config/                 # Fichiers de configuration externes
+├── security/               # Clés cryptographiques
+├── src/main/
+│   ├── java/com/example/kafka/filetransfer/
+│   │   ├── cli/            # Logique de la ligne de commande (Picocli)
+│   │   ├── consumer/       # Logique métier du consommateur
+│   │   ├── kafka/          # Classes d'interaction directe avec Kafka
+│   │   ├── model/          # Objets de données (DTO, Config)
+│   │   ├── producer/       # Logique métier du producteur
+│   │   └── service/        # Services techniques (Chiffrement, Hachage, etc.)
+│   ├── proto/              # Définition du contrat de données Protobuf
+│   └── resources/          # Fichiers de configuration internes (Logback)
+├── target/                 # JARs compilés
+├── pom.xml                 # Dépendances et configuration du build Maven
+└── README.md               # Cette documentation
+Améliorations Futures
+Transactions Kafka : Pour une garantie "tout ou rien" lors de l'envoi des chunks d'un fichier.
+Dead-Letter Queue (DLQ) : Pour archiver les transferts qui échouent systématiquement à la reconstruction au lieu de les perdre.
+Testabilité (Injection de Dépendances) : Refactoriser les commandes CLI pour permettre des tests unitaires plus faciles.
+Suite de Tests Complète : Ajouter des tests unitaires et d'intégration (JUnit, Testcontainers).
+Signature Numérique : Implémenter la signature des fichiers pour garantir la non-répudiation (prouver l'identité de l'expéditeur).
