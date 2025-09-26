@@ -53,7 +53,11 @@ public class FileTransferConsumer {
         this.destinationDir = destinationDir;
         this.kafkaConsumer = new KafkaConsumer<>(config.getKafkaConsumerProperties());
         this.stagingBaseDir = Paths.get(config.getStagingDirectory());
-        try { Files.createDirectories(stagingBaseDir); } catch (IOException e) { throw new RuntimeException("Impossible d'initialiser le répertoire de transit.", e); }
+        try {
+            Files.createDirectories(stagingBaseDir);
+        } catch (IOException e) {
+            throw new RuntimeException("Impossible d'initialiser le répertoire de transit.", e);
+        }
         this.cleanupScheduler = Executors.newSingleThreadScheduledExecutor();
         this.cryptoService = new CryptoService(config);
         this.compressionService = new CompressionService();
@@ -61,7 +65,6 @@ public class FileTransferConsumer {
         this.manifestService = new ManifestService(config);
         this.jsonMapper = new ObjectMapper();
     }
-
 
     /**
      * Démarre le consommateur en mode d'écoute continue.
@@ -221,10 +224,6 @@ public class FileTransferConsumer {
         return builder.build();
     }
 
-    /**
-     * CORRIGÉ : La logique de reconstruction est maintenant plus linéaire et robuste,
-     * garantissant que le bon hash est vérifié sur le bon fichier.
-     */
     private void reconstructFile(InProgressTransfer transfer, String tidLogPrefix) {
         FileChunkMessage metadata = transfer.getFinalChunkMetadata();
         String fileName = metadata.getFileName();
@@ -238,7 +237,6 @@ public class FileTransferConsumer {
             List<Path> sortedChunkFiles = transfer.getSortedChunkFiles();
 
             // Étape 1 : Assembler les chunks (après déchiffrement) dans le fichier temporaire "assembled".
-            // Ce fichier contiendra les données compressées si la compression était activée.
             logger.info("{}Assemblage des chunks déchiffrés...", tidLogPrefix);
             byte[] encryptedSymmetricKey = metadata.getEncryptedSymmetricKey().toByteArray();
             String cipherName = metadata.hasEncryptionCipher() ? metadata.getEncryptionCipher().getValue() : null;
@@ -256,7 +254,6 @@ public class FileTransferConsumer {
 
             // Étape 2 : Gérer la décompression (si nécessaire) pour créer le fichier final temporaire "tmp".
             if (metadata.getCompressionAlgorithm() != CompressionAlgorithm.NONE) {
-                // Le fichier est compressé.
                 if (metadata.hasCompressedFileHash()) {
                     logger.info("{}Vérification de l'intégrité du fichier compressé...", tidLogPrefix);
                     hashingService.verifyFileIntegrity(tempAssembledPath, metadata.getCompressedFileHash().getValue(), metadata.getHashAlgorithm());
@@ -270,12 +267,10 @@ public class FileTransferConsumer {
                 byte[] decompressedBytes = compressionService.decompress(compressedBytes, metadata.getCompressionAlgorithm().name());
                 Files.write(tempPath, decompressedBytes);
             } else {
-                // Le fichier n'est pas compressé. Le fichier assemblé EST le fichier final.
                 Files.move(tempAssembledPath, tempPath, StandardCopyOption.REPLACE_EXISTING);
             }
 
             // Étape 3 : Vérification de l'intégrité finale sur le fichier décompressé.
-            // À ce stade, `tempPath` contient TOUJOURS les données originales et finales.
             logger.info("{}Vérification finale de l'intégrité sur le fichier décompressé...", tidLogPrefix);
             hashingService.verifyFileIntegrity(tempPath, metadata.getFileHash(), metadata.getHashAlgorithm());
             logger.info("{}Intégrité du fichier original ('{}') vérifiée avec succès.", tidLogPrefix, fileName);
@@ -289,7 +284,6 @@ public class FileTransferConsumer {
         } catch (IOException | GeneralSecurityException | SecurityException e) {
             logger.error("{}Événement de transfert : [STATUS={}] - Échec de la reconstruction pour le fichier '{}' : {}", tidLogPrefix, "TRANSFER_FAILED", fileName, e.getMessage(), e);
         } finally {
-            // Nettoyer tous les fichiers temporaires possibles.
             cleanupTransferResources(tempPath, stagingDir, tidLogPrefix);
             cleanupTransferResources(tempAssembledPath, null, tidLogPrefix);
         }
