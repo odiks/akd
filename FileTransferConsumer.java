@@ -236,7 +236,7 @@ public class FileTransferConsumer {
             logger.info("{}Événement de transfert : [STATUS={}] - Reconstruction démarrée pour '{}'", tidLogPrefix, "RECONSTRUCTION_STARTED", fileName);
             List<Path> sortedChunkFiles = transfer.getSortedChunkFiles();
 
-            // Étape 1 : Assembler les chunks (après déchiffrement) dans un fichier temporaire.
+            // Étape 1 : Assembler les chunks (après déchiffrement) dans un fichier temporaire "assembled".
             logger.info("{}Assemblage des chunks déchiffrés...", tidLogPrefix);
             byte[] encryptedSymmetricKey = metadata.getEncryptedSymmetricKey().toByteArray();
             String cipherName = metadata.hasEncryptionCipher() ? metadata.getEncryptionCipher().getValue() : null;
@@ -252,7 +252,7 @@ public class FileTransferConsumer {
                 }
             }
 
-            // Étape 2 : Gérer la décompression (si nécessaire) pour créer le fichier final temporaire.
+            // Étape 2 : Gérer la décompression (si nécessaire) pour créer le fichier final temporaire "tmp".
             if (metadata.getCompressionAlgorithm() != CompressionAlgorithm.NONE) {
                 if (metadata.hasCompressedFileHash()) {
                     logger.info("{}Vérification de l'intégrité du fichier compressé...", tidLogPrefix);
@@ -329,7 +329,7 @@ public class FileTransferConsumer {
                 logger.info("{}Répertoire de transit '{}' nettoyé.", tidLogPrefix, stagingDir);
             }
         } catch (IOException ex) {
-            logger.error("{}Erreur lors du nettoyage des ressources pour '{}'.", tidLogPrefix, stagingDir != null ? stagingDir.getFileName() : tempFile.getFileName(), ex);
+            logger.error("{}Erreur lors du nettoyage des ressources pour '{}'.", tidLogPrefix, stagingDir != null ? stagingDir.getFileName() : (tempFile != null ? tempFile.getFileName() : "inconnu"), ex);
         }
     }
 
