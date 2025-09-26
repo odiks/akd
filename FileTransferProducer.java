@@ -3,27 +3,27 @@ package com.example.kafka.filetransfer.producer;
 import com.example.kafka.filetransfer.kafka.KafkaChunkPublisher;
 import com.example.kafka.filetransfer.model.FileChunkDto;
 import com.example.kafka.filetransfer.model.TransferConfig;
+import com.example.kafka.filetransfer.proto.CompressionAlgorithm; // <-- NOUVEL IMPORT
 import com.example.kafka.filetransfer.proto.FileChunkMessage;
 import com.example.kafka.filetransfer.service.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.StringValue;
-import org.apache.kafka.clients.producer.RecordMetadata; // NOUVEL IMPORT
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Base64;
 import java.util.Iterator;
 import java.util.UUID;
-import java.util.concurrent.Future; // NOUVEL IMPORT
 import java.util.stream.Collectors;
 
 public class FileTransferProducer {
 
     private static final Logger logger = LoggerFactory.getLogger(FileTransferProducer.class);
 
-    // ... (déclarations et constructeur inchangés) ...
     private final TransferConfig config;
     private final ManifestService manifestService;
     private final HashingService hashingService;
@@ -41,81 +41,79 @@ public class FileTransferProducer {
         this.chunkingService = new ChunkingService(config.getChunkSize());
     }
 
-
     public void startTransfer(Path filePath) throws Exception {
         String transferId = UUID.randomUUID().toString();
         String tidLogPrefix = "[TID:" + transferId.substring(0, 8) + "] ";
+        
+        Path fileToChunk = filePath;
+        Path tempCompressedFile = null;
 
         try (KafkaChunkPublisher publisher = new KafkaChunkPublisher(config)) {
-
             logger.info("{}Événement de transfert : [STATUS={}] - Démarrage du transfert pour le fichier '{}'", tidLogPrefix, "TRANSFER_STARTED", filePath.getFileName());
 
-            // ... (logique de création du manifest, hash, etc. inchangée) ...
             FileChunkMessage.Builder manifest = manifestService.createManifest(filePath, transferId);
             String fullFileHash = hashingService.calculateFileHash(filePath, config.getHashAlgorithm());
             manifest.setFileHash(fullFileHash);
-            logger.info("{}Hash du fichier complet calculé : {}", tidLogPrefix, fullFileHash);
+            logger.info("{}Hash du fichier original calculé : {}", tidLogPrefix, fullFileHash);
+
+            // =======================================================================
+            // CORRECTION APPLIQUÉE ICI
+            // =======================================================================
+            // On définit l'algorithme de compression dans le manifeste DÈS LE DÉBUT.
+            CompressionAlgorithm compressionAlgo = CompressionAlgorithm.valueOf(config.getCompressionAlgorithm().toUpperCase());
+            manifest.setCompressionAlgorithm(compressionAlgo);
+            // =======================================================================
+
+            if (compressionAlgo != CompressionAlgorithm.NONE) {
+                logger.info("{}Compression du fichier en cours (Algorithme: {})...", tidLogPrefix, config.getCompressionAlgorithm());
+                byte[] originalBytes = Files.readAllBytes(filePath);
+                byte[] compressedBytes = compressionService.compress(originalBytes, config.getCompressionAlgorithm());
+                
+                tempCompressedFile = Files.createTempFile("kafka-transfer-", ".compressed");
+                Files.write(tempCompressedFile, compressedBytes, StandardOpenOption.WRITE);
+                
+                String compressedHash = hashingService.calculateFileHash(tempCompressedFile, config.getHashAlgorithm());
+                manifest.setCompressedFileHash(StringValue.of(compressedHash));
+                fileToChunk = tempCompressedFile;
+                logger.info("{}Hash du fichier compressé calculé : {}", tidLogPrefix, compressedHash);
+                logger.info("{}Taille après compression : {} octets (Ratio: {}%)", tidLogPrefix, compressedBytes.length, String.format("%.2f", (double)compressedBytes.length / originalBytes.length * 100));
+            }
+
             CryptoService.EncryptionResult encryptionResult = cryptoService.prepareEncryption();
-            final int totalChunks = (int) Math.ceil((double) filePath.toFile().length() / config.getChunkSize());
+            final int totalChunks = (int) Math.ceil((double) Files.size(fileToChunk) / config.getChunkSize());
             manifest.setTotalChunks(totalChunks);
             logger.info("{}Le fichier sera découpé en {} chunks.", tidLogPrefix, totalChunks);
-            
-            // NOUVEAU: Variables pour stocker les métadonnées de début et de fin.
-            RecordMetadata firstChunkMetadata = null;
-            RecordMetadata lastChunkMetadata;
 
-            Iterator<byte[]> chunkIterator = chunkingService.iterateChunks(filePath);
+            Iterator<byte[]> chunkIterator = chunkingService.iterateChunks(fileToChunk);
             int chunkNumber = 0;
             while (chunkIterator.hasNext()) {
                 chunkNumber++;
                 byte[] chunkData = chunkIterator.next();
                 String chunkHash = hashingService.calculateChunkHash(chunkData, config.getHashAlgorithm());
-                byte[] processedData = processChunkData(chunkData, encryptionResult);
+                byte[] processedData = cryptoService.encrypt(chunkData, encryptionResult);
+
                 FileChunkMessage.Builder chunkMessageBuilder = manifest.clone()
                         .setChunkNumber(chunkNumber)
                         .setChunkHash(chunkHash)
                         .setOriginalChunkSize(chunkData.length)
                         .setData(ByteString.copyFrom(processedData));
                 byte[] payload = serialize(chunkMessageBuilder.build());
-                String chunkDebugInfo = chunkNumber + "/" + totalChunks;
-
-                // MODIFIÉ: Logique d'envoi synchrone/asynchrone
-                if (chunkNumber == 1) {
-                    // Envoi SYNCHRONE du premier chunk pour obtenir l'offset de début.
-                    firstChunkMetadata = publisher.publishSync(transferId, payload).get();
-                    logger.debug("{}Premier chunk {} publié (Offset: {}).", tidLogPrefix, chunkDebugInfo, firstChunkMetadata.offset());
-                } else {
-                    // Envoi ASYNCHRONE des chunks intermédiaires pour la performance.
-                    publisher.publish(transferId, payload, chunkDebugInfo);
-                    logger.debug("{}Chunk {} publié.", tidLogPrefix, chunkDebugInfo);
-                }
+                publisher.publish(transferId, payload, chunkNumber + "/" + totalChunks);
+                logger.debug("{}Chunk {} publié.", tidLogPrefix, chunkNumber + "/" + totalChunks);
             }
 
             logger.info("{}Tous les chunks de données ont été publiés. Envoi du message final.", tidLogPrefix);
             FileChunkMessage finalMessageProto = buildFinalMessage(manifest, encryptionResult);
             byte[] finalPayload = serialize(finalMessageProto);
-            // L'envoi du message final est déjà SYNCHRONE.
-            lastChunkMetadata = publisher.publishSync(transferId, finalPayload).get();
-            logger.debug("{}Message final publié (Offset: {}).", tidLogPrefix, lastChunkMetadata.offset());
-
-
+            publisher.publishSync(transferId, finalPayload).get();
             logger.info("{}Événement de transfert : [STATUS={}] - Tous les chunks ont été envoyés avec succès.", tidLogPrefix, "TRANSFER_COMPLETED_PRODUCER");
-
-            // NOUVEAU: Log final avec les informations d'offset.
-            if (firstChunkMetadata != null) {
-                logger.info("{}TRAÇABILITÉ: Le fichier '{}' a été écrit sur le topic '{}', partition {}, entre les offsets {} et {}.",
-                        tidLogPrefix,
-                        filePath.getFileName(),
-                        firstChunkMetadata.topic(),
-                        firstChunkMetadata.partition(),
-                        firstChunkMetadata.offset(),
-                        lastChunkMetadata.offset()
-                );
+        } finally {
+            if (tempCompressedFile != null) {
+                Files.deleteIfExists(tempCompressedFile);
             }
         }
     }
-    
-    // ... (Le reste de la classe est inchangé) ...
+
     private byte[] serialize(FileChunkMessage message) throws Exception {
         if (config.getSerializationFormat() == TransferConfig.SerializationFormat.JSON) {
             FileChunkDto dto = new FileChunkDto();
@@ -124,25 +122,22 @@ public class FileTransferProducer {
             dto.fileSize = message.getFileSize();
             dto.totalChunks = message.getTotalChunks();
             dto.chunkNumber = message.getChunkNumber();
+            dto.originalChunkSize = message.getOriginalChunkSize();
+            if (message.hasSourceHostname()) dto.sourceHostname = message.getSourceHostname().getValue();
+            if (message.hasSourceUsername()) dto.sourceUsername = message.getSourceUsername().getValue();
+            dto.hashAlgorithm = message.getHashAlgorithm().name();
             dto.fileHash = message.getFileHash();
             dto.chunkHash = message.getChunkHash();
-            dto.hashAlgorithm = message.getHashAlgorithm().name();
-            dto.originalChunkSize = message.getOriginalChunkSize();
+            dto.compressionAlgorithm = message.getCompressionAlgorithm().name();
+            if (message.hasCompressedFileHash()) dto.compressedFileHash = message.getCompressedFileHash().getValue();
+            dto.data = Base64.getEncoder().encodeToString(message.getData().toByteArray());
             dto.destinationPath = message.getDestinationPath();
             dto.mtimeEpoch = message.getMtimeEpoch();
             dto.atimeEpoch = message.getAtimeEpoch();
-            if (message.hasBirthtimeEpoch()) {
-                dto.birthtimeEpoch = message.getBirthtimeEpoch().getValue();
-            }
-            if (message.hasPosixPermissions()) {
-                dto.posixPermissions = message.getPosixPermissions().getValue();
-            }
-            if (message.hasOwnerName()) {
-                dto.ownerName = message.getOwnerName().getValue();
-            }
-            if (message.hasGroupName()) {
-                dto.groupName = message.getGroupName().getValue();
-            }
+            if (message.hasBirthtimeEpoch()) dto.birthtimeEpoch = message.getBirthtimeEpoch().getValue();
+            if (message.hasPosixPermissions()) dto.posixPermissions = message.getPosixPermissions().getValue();
+            if (message.hasOwnerName()) dto.ownerName = message.getOwnerName().getValue();
+            if (message.hasGroupName()) dto.groupName = message.getGroupName().getValue();
             if (!message.getWindowsAclsList().isEmpty()) {
                 dto.windowsAcls = message.getWindowsAclsList().stream().map(protoAcl -> {
                     FileChunkDto.AclEntryDto aclDto = new FileChunkDto.AclEntryDto();
@@ -154,8 +149,6 @@ public class FileTransferProducer {
                 }).collect(Collectors.toList());
             }
             dto.isFinalChunk = message.getIsFinalChunk();
-            dto.compressionAlgorithm = message.getCompressionAlgorithm().name();
-            dto.data = Base64.getEncoder().encodeToString(message.getData().toByteArray());
             if (message.hasEncryptionCipher()) {
                 dto.encryptionCipher = message.getEncryptionCipher().getValue();
                 dto.encryptedSymmetricKey = Base64.getEncoder().encodeToString(message.getEncryptedSymmetricKey().toByteArray());
@@ -165,10 +158,7 @@ public class FileTransferProducer {
             return message.toByteArray();
         }
     }
-    private byte[] processChunkData(byte[] originalData, CryptoService.EncryptionResult encryptionResult) throws Exception {
-        byte[] compressedData = compressionService.compress(originalData, config.getCompressionAlgorithm());
-        return cryptoService.encrypt(compressedData, encryptionResult);
-    }
+
     private FileChunkMessage buildFinalMessage(FileChunkMessage.Builder manifest, CryptoService.EncryptionResult encryptionResult) {
         if (encryptionResult.isEncrypted()) {
             manifest.setEncryptedSymmetricKey(ByteString.copyFrom(encryptionResult.getEncryptedSymmetricKey()));
