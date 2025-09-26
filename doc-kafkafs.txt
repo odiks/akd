@@ -155,3 +155,45 @@ Dead-Letter Queue (DLQ) : Pour archiver les transferts qui échouent systématiq
 Testabilité (Injection de Dépendances) : Refactoriser les commandes CLI pour permettre des tests unitaires plus faciles.
 Suite de Tests Complète : Ajouter des tests unitaires et d'intégration (JUnit, Testcontainers).
 Signature Numérique : Implémenter la signature des fichiers pour garantir la non-répudiation (prouver l'identité de l'expéditeur).
+
+
+
+Métadonnées Présentes et Complètement Implémentées
+Les métadonnées suivantes sont bien collectées par le ManifestService, envoyées via Kafka, et peuvent être appliquées par le consommateur :
+
+✅ Nom du fichier (file_name) : Implémenté.
+✅ Taille du fichier (file_size) : Implémentée.
+✅ Nombre total de chunks (total_chunks) : Implémenté.
+✅ Numéro du chunk (chunk_number) : Implémenté.
+✅ Chemin de destination (destination_path) : Implémenté, mais sa logique d'utilisation à la reconstruction est implicite (le consommateur écrit dans le --destination-dir fourni).
+✅ Dates (mtime, atime, birthtime) : Complètement implémentées.
+✅ Permissions (Unix) : Implémentées (posix_permissions).
+✅ Utilisateur (user), Groupe (group) (Unix) : Implémentés (owner_name, group_name).
+✅ Hash du fichier (file_hash) : Complètement implémenté (un des piliers de l'application).
+✅ Clé publique + chiffrement : Complètement implémenté.
+Métadonnées Présentes mais avec des Limitations
+🟡 ACL (si disponible) : Partiellement implémenté.
+Le code est présent pour lire les ACLs Windows (AclFileAttributeView) et les appliquer.
+Limitation : Cela ne fonctionnera que si le producteur et le consommateur s'exécutent sur des systèmes de fichiers compatibles (NTFS vers NTFS) et si les UserPrincipal (utilisateurs/groupes) des ACLs peuvent être résolus sur la machine de destination. Le code logue un avertissement si un principal n'est pas trouvé, ce qui est le bon comportement.
+Métadonnées Non Présentes dans l'Implémentation Actuelle
+Les métadonnées suivantes, bien que listées dans le cahier des charges, ne sont pas actuellement collectées ou traitées par l'application :
+
+❌ UID, GID (Unix) : Le code gère les noms (owner_name, group_name) mais pas les identifiants numériques (UID/GID). C'est souvent un meilleur choix car les UID/GID peuvent ne pas correspondre entre différents systèmes, alors que les noms ont plus de chances de l'être (via LDAP/AD par exemple).
+❌ SID (Windows) : De même, le code gère les noms de principaux (BUILTIN\Administrators) mais pas leur Security IDentifier (SID) brut.
+❌ Permissions (Windows) : Le code gère les ACLs, qui est le mécanisme de permission principal de Windows, mais pas une abstraction plus simple qui pourrait être l'équivalent des permissions rwx de POSIX.
+❌ XATTR (Attributs Étendus) : Non implémenté. La lecture des attributs étendus (UserDefinedFileAttributeView) n'est pas présente dans ManifestService.
+❌ Contexte SELinux : Non implémenté. C'est une métadonnée très spécifique aux systèmes Linux utilisant SELinux. Sa lecture nécessiterait l'exécution de commandes système (ls -Z) ou l'utilisation de bibliothèques JNI/JNA.
+❌ Signature des fichiers : Non implémenté. Comme discuté, la logique de signature avec une clé privée pour la non-répudiation n'a pas été ajoutée.
+Tableau Récapitulatif
+Métadonnée	Statut	Commentaire
+Nom, Taille, Chunks, Dates	✅ Implémenté	Fonctionnalité de base, entièrement couverte.
+Hash Fichier	✅ Implémenté	Pilier de la fonctionnalité d'intégrité.
+Chiffrement	✅ Implémenté	Pilier de la fonctionnalité de confidentialité.
+Permissions POSIX (rwx)	✅ Implémenté	Couvert pour les systèmes de type Unix.
+Propriétaire/Groupe POSIX	✅ Implémenté	Gestion par nom.
+ACLs Windows	🟡 Partiellement	Le code existe mais dépend de la compatibilité des systèmes.
+UID/GID/SID	❌ Non Implémenté	Gestion par nom uniquement, ce qui est souvent plus portable.
+Attributs Étendus (XATTR)	❌ Non Implémenté	Fonctionnalité non couverte.
+Contexte SELinux	❌ Non Implémenté	Fonctionnalité non couverte, très spécifique.
+Signature des Fichiers	❌ Non Implémenté	La non-répudiation n'est pas couverte.
+L'implémentation actuelle couvre donc les exigences les plus critiques et les plus courantes d'un transfert de fichiers multi-plateforme, tout en laissant de côté les métadonnées les plus exotiques ou spécifiques à un OS, qui pourraient être ajoutées comme des améliorations futures.
