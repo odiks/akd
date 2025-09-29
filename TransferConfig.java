@@ -53,7 +53,7 @@ public class TransferConfig {
         if (mode == AppMode.CONSUMER) {
             requireProperty(ConsumerConfig.GROUP_ID_CONFIG);
             requireProperty("staging.directory"); // NOUVELLE VÉRIFICATION
-            requireProperty("encryption.private_key.path"); // NOUVELLE VÉRIFICATION
+           // requireProperty("encryption.private_key.path"); // NOUVELLE VÉRIFICATION
             validatePositiveLong("transfer.timeout.hours", "24");
         }
     }
