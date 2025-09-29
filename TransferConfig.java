@@ -34,8 +34,7 @@ public class TransferConfig {
         // --- Validations communes ---
         requireProperty("bootstrap.servers");
         requireProperty("topic.data");
-        requireProperty("topic.status"); // NOUVELLE VÉRIFICATION
-
+       
         validatePropertyInSet("serialization.format", Set.of("PROTOBUF", "JSON"), "PROTOBUF");
         validatePropertyInSet("hash.algorithm", Set.of("SHA-256", "SHA-384", "SHA-512"), "SHA-256");
         
@@ -44,6 +43,9 @@ public class TransferConfig {
             validatePropertyInSet("compression.algorithm", Set.of("NONE", "GZIP", "SNAPPY"), "NONE");
             validatePositiveInteger("chunk.size", "1048576");
             
+            // NOUVELLE VÉRIFICATION (boolean)
+            validateBooleanProperty("encryption.enabled", "false");
+
             if (Boolean.parseBoolean(props.getProperty("encryption.enabled", "false"))) {
                 requireProperty("encryption.consumer.public_key.path");
             }
@@ -52,9 +54,14 @@ public class TransferConfig {
         // --- Validations spécifiques au Consommateur ---
         if (mode == AppMode.CONSUMER) {
             requireProperty(ConsumerConfig.GROUP_ID_CONFIG);
-            requireProperty("staging.directory"); // NOUVELLE VÉRIFICATION
-           // requireProperty("encryption.private_key.path"); // NOUVELLE VÉRIFICATION
+            requireProperty("staging.directory");
+            //requireProperty("encryption.private_key.path");
             validatePositiveLong("transfer.timeout.hours", "24");
+
+            // NOUVELLES VÉRIFICATIONS (boolean)
+            validateBooleanProperty("metadata.restore.permissions", "true");
+            validateBooleanProperty("metadata.restore.owner", "false");
+            validateBooleanProperty("metadata.restore.timestamps", "true");
         }
     }
     
@@ -131,6 +138,21 @@ public class TransferConfig {
             }
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("La propriété '" + key + "' doit être un nombre valide, mais la valeur est : '" + props.getProperty(key) + "'");
+        }
+    }
+
+    /**
+     * NOUVELLE MÉTHODE DE VALIDATION
+     * Vérifie qu'une propriété a bien la valeur "true" ou "false", de manière insensible à la casse.
+     */
+    private void validateBooleanProperty(String key, String defaultValue) {
+        String value = props.getProperty(key, defaultValue);
+        if (value == null) {
+            return; // Ne devrait pas arriver avec une valeur par défaut
+        }
+        String trimmedValue = value.trim().toLowerCase();
+        if (!"true".equals(trimmedValue) && !"false".equals(trimmedValue)) {
+            throw new IllegalArgumentException("La propriété '" + key + "' doit avoir la valeur 'true' ou 'false', mais la valeur est : '" + props.getProperty(key) + "'");
         }
     }
 }
