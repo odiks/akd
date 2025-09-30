@@ -1,0 +1,86 @@
+1. CryptoService.java
+* Pourquoi : La cryptographie est complexe et sensible. Un futur développeur (ou vous-même dans 6 mois) doit comprendre parfaitement le flux, les algorithmes choisis et le format des données pour ne pas introduire de faille de sécurité.
+* Exemple de commentaire de classe : code  Java  /**
+*  * Gère toutes les opérations cryptographiques en implémentant un chiffrement hybride.
+*  * <p>
+*  * Le processus est le suivant :
+*  * 1. Une clé symétrique AES-256 unique est générée pour chaque transfert (clé de session).
+*  * 2. Les données du fichier sont chiffrées avec cette clé AES en mode GCM pour la vitesse et l'intégrité.
+*  * 3. La clé de session AES est elle-même chiffrée avec la clé publique RSA du consommateur.
+*  * 4. Le payload final d'un chunk chiffré est : 12 octets d'IV + N octets de données chiffrées.
+*  */  
+/**
+ * Gère toutes les opérations cryptographiques en implémentant un chiffrement hybride.
+ * <p>
+ * Le processus est le suivant :
+ * 1. Une clé symétrique AES-256 unique est générée pour chaque transfert (clé de session).
+ * 2. Les données du fichier sont chiffrées avec cette clé AES en mode GCM pour la vitesse et l'intégrité.
+ * 3. La clé de session AES est elle-même chiffrée avec la clé publique RSA du consommateur.
+ * 4. Le payload final d'un chunk chiffré est : 12 octets d'IV + N octets de données chiffrées.
+ */
+public class CryptoService { //...
+
+
+
+
+
+
+2. FileTransferProducer.java et FileTransferConsumer.java
+* Pourquoi : Ce sont les "chefs d'orchestre". Leurs méthodes principales (startTransfer, reconstructFile) suivent un processus en plusieurs étapes qui doit être clair.
+* Exemple de commentaire de méthode (startTransfer) : code  Java  /**
+*  * Orchestre le transfert complet d'un fichier.
+*  * Le processus se déroule en streaming pour gérer les fichiers volumineux :
+*  * 1. Crée un manifeste de base avec les métadonnées du fichier.
+*  * 2. Calcule le hash du fichier original.
+*  * 3. Prépare le chiffrement si nécessaire.
+*  * 4. Itère sur les chunks du fichier SANS le charger en mémoire.
+*  * 5. Pour chaque chunk : compresse, chiffre, et envoie à Kafka.
+*  * 6. Gère les échecs d'envoi asynchrones pour annuler le transfert si un chunk échoue.
+*  * 7. Envoie un message final contenant les métadonnées de chiffrement.
+*  *
+*  * @param filePath Le chemin vers le fichier source à envoyer.
+*  * @throws Exception Si une erreur critique se produit (IO, Kafka, Crypto...).
+*  */  
+
+
+
+3. TransferConfig.java
+* Pourquoi : C'est l'interface de configuration de votre application. Chaque propriété doit être documentée pour que les utilisateurs sachent ce qu'elle fait.
+* Exemple de commentaire de méthode (getter) : code  Java  /**
+*  * Retourne le répertoire de transit utilisé par le consommateur pour stocker
+*  * temporairement les chunks de fichiers avant leur assemblage.
+*  *
+*  * @return Le chemin du répertoire de transit.
+*  */  
+1. KafkaChunkPublisher.java
+* Pourquoi : Elle expose une API pour interagir avec Kafka. Il est important de clarifier le comportement (synchrone vs asynchrone).
+* Exemple de commentaire de méthode : code  Java  /**
+*  * Publie un payload de manière asynchrone et met à jour un drapeau en cas d'erreur.
+*  * L'envoi est non-bloquant pour maximiser le débit. L'échec est géré
+*  * via la callback qui met à jour le drapeau.
+*  *
+*  * @param transferId La clé du message Kafka.
+*  * @param payload Le message sérialisé à envoyer.
+*  * @param chunkDebugInfo Une information de contexte pour le log.
+*  * @param transferFailedFlag Le drapeau atomique à mettre à 'true' en cas d'échec.
+*  */
+* public void publish(String transferId, byte[] payload, String chunkDebugInfo, AtomicBoolean transferFailedFlag) { //...  
+2. ErrorCode.java
+* Pourquoi : Documenter chaque code d'erreur aide les opérateurs et les développeurs à comprendre la signification d'un échec.
+* Exemple de commentaire d'énumération : code  Java  /**
+*  * Une erreur de communication avec le cluster Kafka (ex: broker injoignable, timeout).
+*  */
+* KAFKA_ERROR(30, "Erreur de communication avec le cluster Kafka"),  
+3. Les classes cli/ (ProducerCommand.java, ConsumerCommand.java, App.java)
+* Pourquoi : Ici, les annotations Picocli (@Command(description=...)) sont déjà une excellente forme de documentation. Un simple JavaDoc au niveau de la classe est suffisant.
+* Exemple de commentaire de classe : code  Java  /**
+*  * Point d'entrée principal de l'application via la ligne de commande.
+*  * Utilise Picocli pour router les appels vers les sous-commandes appropriées.
+*  */
+* @Command(...)
+* public class App { //...  
+
+Niveau 3 : Utile mais moins critique
+Ces classes sont souvent simples ou leur nom est suffisamment explicite. Un commentaire de classe est généralement suffisant.
+* ChunkingService.java, HashingService.java, CompressionService.java : Un JavaDoc au niveau de la classe expliquant son rôle est parfait. Le nom des méthodes est déjà très clair.
+* InProgressTransfer.java : Un commentaire de classe expliquant que cet objet suit l'état d'un transfert sur le disque et non en mémoire est la clarification la plus importante à apporter.
