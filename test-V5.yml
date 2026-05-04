@@ -72,7 +72,7 @@
     "always": {}
   },
   "actions": {
-    "write_alert": {
+    "send_webhook": {
       "condition": {
         "script": {
           "source": "return ctx.payload.transition_detected == true;",
@@ -85,8 +85,17 @@
           "lang": "painless"
         }
       },
-      "index": {
-        "index": "redbutton-alerts"
+      "webhook": {
+        "scheme": "https",
+        "host": "webhook.company.internal",
+        "port": 443,
+        "method": "post",
+        "path": "/alert",
+        "params": {},
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{{#toJson}}ctx.payload{{/toJson}}"
       }
     },
     "update_tracking": {
@@ -103,8 +112,9 @@
     }
   },
   "metadata": {
-    "description": "V4 — Détection stricte OFF→ON via comparaison état précédent/courant",
-    "version": "4.0.0"
+    "webhook_url": "https://webhook.company.internal/alert",
+    "description": "V4 — Détection stricte OFF→ON, notification webhook",
+    "version": "4.1.0"
   },
   "transform": {
     "script": {
