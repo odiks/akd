@@ -1,0 +1,188 @@
+{
+  "trigger": {
+    "schedule": {
+      "interval": "1m"
+    }
+  },
+  "input": {
+    "chain": {
+      "inputs": [
+        {
+          "current": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "redbutton"
+                ],
+                "rest_total_hits_as_int": true,
+                "body": {
+                  "size": 1,
+                  "_source": [
+                    "redbutton_splunk",
+                    "redbutton_oss",
+                    "last_modification"
+                  ],
+                  "query": {
+                    "match_all": {}
+                  },
+                  "sort": [
+                    {
+                      "last_modification": {
+                        "order": "desc"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "previous": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "redbutton-state-tracking"
+                ],
+                "rest_total_hits_as_int": true,
+                "body": {
+                  "size": 1,
+                  "_source": [
+                    "redbutton_splunk",
+                    "redbutton_oss"
+                  ],
+                  "query": {
+                    "ids": {
+                      "values": [
+                        "current"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "condition": {
+    "always": {}
+  },
+  "actions": {
+    "write_alert": {
+      "condition": {
+        "script": {
+          "source": "return ctx.payload.transition_detected == true;",
+          "lang": "painless"
+        }
+      },
+      "transform": {
+        "script": {
+          "source": "return ctx.payload.alert_data;",
+          "lang": "painless"
+        }
+      },
+      "index": {
+        "index": "redbutton-alerts"
+      }
+    },
+    "update_tracking": {
+      "transform": {
+        "script": {
+          "source": "return ctx.payload.tracking_state;",
+          "lang": "painless"
+        }
+      },
+      "index": {
+        "index": "redbutton-state-tracking",
+        "doc_id": "current"
+      }
+    }
+  },
+  "metadata": {
+    "description": "V4 — Détection stricte OFF→ON via comparaison état précédent/courant",
+    "version": "4.0.0"
+  },
+  "transform": {
+    "script": {
+      "source": """
+        String extractState(def field) {
+          if (field instanceof List) {
+            return field.contains('ON') ? 'ON' : 'OFF';
+          } else if (field instanceof String) {
+            return field == 'ON' ? 'ON' : 'OFF';
+          }
+          return 'OFF';
+        }
+
+        def currentHits = ctx.payload.current.hits.hits;
+        String currSplunk = 'OFF';
+        String currOss    = 'OFF';
+
+        if (currentHits != null && currentHits.size() > 0) {
+          def src = currentHits[0]['_source'];
+          if (src.containsKey('redbutton_splunk')) {
+            currSplunk = extractState(src['redbutton_splunk']);
+          }
+          if (src.containsKey('redbutton_oss')) {
+            currOss = extractState(src['redbutton_oss']);
+          }
+        }
+
+        def prevHits = ctx.payload.previous.hits.hits;
+        String prevSplunk = 'OFF';
+        String prevOss    = 'OFF';
+
+        if (prevHits != null && prevHits.size() > 0) {
+          def src = prevHits[0]['_source'];
+          if (src.containsKey('redbutton_splunk')) {
+            prevSplunk = src['redbutton_splunk'] instanceof String
+                         ? src['redbutton_splunk'] : 'OFF';
+          }
+          if (src.containsKey('redbutton_oss')) {
+            prevOss = src['redbutton_oss'] instanceof String
+                      ? src['redbutton_oss'] : 'OFF';
+          }
+        }
+
+        def transitions = new ArrayList();
+        if (prevSplunk == 'OFF' && currSplunk == 'ON') {
+          transitions.add('redbutton_splunk');
+        }
+        if (prevOss == 'OFF' && currOss == 'ON') {
+          transitions.add('redbutton_oss');
+        }
+
+        boolean transitionDetected = !transitions.isEmpty();
+
+        return [
+          'transition_detected': transitionDetected,
+          'alert_data': [
+            'watch_id'      : ctx.watch_id,
+            'execution_time': ctx.execution_time,
+            'alert_type'    : 'TRANSITION_OFF_TO_ON',
+            'severity'      : 'CRITICAL',
+            'transitions'   : transitions,
+            'state_before'  : [
+              'redbutton_splunk': prevSplunk,
+              'redbutton_oss'   : prevOss
+            ],
+            'state_after': [
+              'redbutton_splunk': currSplunk,
+              'redbutton_oss'   : currOss
+            ]
+          ],
+          'tracking_state': [
+            'redbutton_splunk': currSplunk,
+            'redbutton_oss'   : currOss,
+            'last_updated'    : ctx.execution_time
+          ]
+        ];
+      """,
+      "lang": "painless"
+    }
+  }
+}
