@@ -1,0 +1,286 @@
+PUT _watcher/watch/logstash_pipeline_missing
+{
+  "trigger": {
+    "schedule": {
+      "interval": "1m"
+    }
+  },
+  "input": {
+    "chain": {
+      "inputs": [
+        {
+          "monitoring": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  ".monitoring-logstash-*"
+                ],
+                "rest_total_hits_as_int": true,
+                "body": {
+                  "size": 0,
+                  "query": {
+                    "bool": {
+                      "filter": [
+                        {
+                          "range": {
+                            "@timestamp": {
+                              "gte": "now-10m"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "aggs": {
+                    "by_host": {
+                      "terms": {
+                        "field": "host.name",
+                        "size": 1000
+                      },
+                      "aggs": {
+                        "healthy_in_detection_window": {
+                          "filter": {
+                            "nested": {
+                              "path": "logstash.node.stats.pipelines",
+                              "query": {
+                                "exists": {
+                                  "field": "logstash.node.stats.pipelines.id"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "healthy_in_resolution_window": {
+                          "filter": {
+                            "bool": {
+                              "filter": [
+                                {
+                                  "range": {
+                                    "@timestamp": {
+                                      "gte": "now-5m"
+                                    }
+                                  }
+                                },
+                                {
+                                  "nested": {
+                                    "path": "logstash.node.stats.pipelines",
+                                    "query": {
+                                      "exists": {
+                                        "field": "logstash.node.stats.pipelines.id"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        },
+                        "last_metric_at": {
+                          "max": {
+                            "field": "@timestamp"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "open_incidents": {
+            "search": {
+              "request": {
+                "search_type": "query_then_fetch",
+                "indices": [
+                  "watcher-incidents-logstash"
+                ],
+                "indices_options": {
+                  "ignore_unavailable": true
+                },
+                "rest_total_hits_as_int": true,
+                "body": {
+                  "size": 1000,
+                  "query": {
+                    "bool": {
+                      "filter": [
+                        {
+                          "term": {
+                            "alert_type": "logstash_pipeline_missing"
+                          }
+                        },
+                        {
+                          "term": {
+                            "status": "open"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "condition": {
+    "always": {}
+  },
+  "transform": {
+    "script": {
+      "source": """
+        def openByHost = new HashMap();
+
+        if (ctx.payload.open_incidents != null &&
+            ctx.payload.open_incidents.hits != null &&
+            ctx.payload.open_incidents.hits.hits != null) {
+          for (def hit : ctx.payload.open_incidents.hits.hits) {
+            def src = hit._source;
+            if (src != null && src.host != null && src.host.name != null) {
+              openByHost.put(src.host.name, src);
+            }
+          }
+        }
+
+        def stateDocs = [];
+        def eventDocs = [];
+        def now = ctx.execution_time.toString();
+
+        for (def bucket : ctx.payload.monitoring.aggregations.by_host.buckets) {
+          def host = bucket.key;
+          def sampleCount = bucket.doc_count;
+          def healthy10 = bucket.healthy_in_detection_window.doc_count;
+          def healthy5 = bucket.healthy_in_resolution_window.doc_count;
+          def existing = openByHost.get(host);
+
+          if (sampleCount >= ctx.metadata.min_samples_to_open && healthy10 == 0) {
+            boolean isNew = existing == null;
+
+            def state = isNew ? new HashMap() : new HashMap(existing);
+            state.put('_index', ctx.metadata.state_index);
+            state.put('_id', 'logstash_pipeline_missing_' + host);
+            state.put('key', 'logstash_pipeline_missing_' + host);
+            state.put('alert_type', 'logstash_pipeline_missing');
+            state.put('status', 'open');
+            state.put('host', ['name': host]);
+            state.put('sample_count', sampleCount);
+            state.put('healthy_sample_count_10m', healthy10);
+            state.put('last_metric_at', bucket.last_metric_at.value_as_string);
+            state.put('first_seen', isNew ? now : existing.first_seen);
+            state.put('last_seen', now);
+            state.put(
+              'occurrence_count',
+              isNew ? 1 : ((existing.occurrence_count == null ? 0 : existing.occurrence_count) + 1)
+            );
+
+            stateDocs.add(state);
+
+            if (isNew) {
+              def event = new HashMap(state);
+              event.remove('_id');
+              event.put('_index', ctx.metadata.event_index);
+              event.put('event_type', 'opened');
+              event.put('event_at', now);
+              event.put('severity', 'critical');
+              event.put('message', 'Aucune pipeline Logstash detectee sur ' + host + ' depuis ' + ctx.metadata.detection_window);
+              eventDocs.add(event);
+            }
+
+          } else if (existing != null &&
+                     healthy5 >= ctx.metadata.min_healthy_samples_to_resolve) {
+            def state = new HashMap(existing);
+            state.put('_index', ctx.metadata.state_index);
+            state.put('_id', 'logstash_pipeline_missing_' + host);
+            state.put('status', 'resolved');
+            state.put('resolved_at', now);
+            state.put('last_seen', now);
+            state.put('healthy_sample_count_5m', healthy5);
+            state.put('last_metric_at', bucket.last_metric_at.value_as_string);
+
+            stateDocs.add(state);
+
+            def event = new HashMap(state);
+            event.remove('_id');
+            event.put('_index', ctx.metadata.event_index);
+            event.put('event_type', 'resolved');
+            event.put('event_at', now);
+            event.put('severity', 'info');
+            event.put('message', 'Le host ' + host + ' rapporte a nouveau des pipelines actives apres ' + (existing.occurrence_count == null ? 0 : existing.occurrence_count) + ' occurrences');
+            eventDocs.add(event);
+          }
+        }
+
+        return [
+          'state_docs': stateDocs,
+          'event_docs': eventDocs
+        ];
+      """,
+      "lang": "painless"
+    }
+  },
+  "actions": {
+    "save_state": {
+      "condition": {
+        "script": {
+          "source": "return ctx.payload.state_docs.size() > 0;",
+          "lang": "painless"
+        }
+      },
+      "transform": {
+        "script": {
+          "source": "return ['_doc': ctx.payload.state_docs];",
+          "lang": "painless"
+        }
+      },
+      "index": {}
+    },
+    "write_events": {
+      "condition": {
+        "script": {
+          "source": "return ctx.payload.event_docs.size() > 0;",
+          "lang": "painless"
+        }
+      },
+      "transform": {
+        "script": {
+          "source": "return ['_doc': ctx.payload.event_docs];",
+          "lang": "painless"
+        }
+      },
+      "index": {}
+    },
+    "notify_events": {
+      "condition": {
+        "script": {
+          "source": "return ctx.payload.event_docs.size() > 0;",
+          "lang": "painless"
+        }
+      },
+      "foreach": "ctx.payload.event_docs",
+      "max_iterations": 200,
+      "webhook": {
+        "scheme": "https",
+        "host": "your-endpoint.example.com",
+        "port": 443,
+        "method": "post",
+        "path": "/alerts/logstash",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"event_type\": \"{{ctx.payload.event_type}}\", \"host\": \"{{ctx.payload.host.name}}\", \"status\": \"{{ctx.payload.status}}\", \"severity\": \"{{ctx.payload.severity}}\", \"message\": \"{{ctx.payload.message}}\", \"occurrence_count\": {{ctx.payload.occurrence_count}}, \"timestamp\": \"{{ctx.payload.event_at}}\"}"
+      }
+    }
+  },
+  "metadata": {
+    "min_samples_to_open": 10,
+    "state_index": "watcher-incidents-logstash",
+    "detection_window": "10m",
+    "min_healthy_samples_to_resolve": 3,
+    "event_index": "watcher-alerts-test",
+    "resolution_window": "5m"
+  }
+}
