@@ -1,0 +1,100 @@
+# metricbeat.yml — monitoring des nodes Elasticsearch / OpenSearch
+# Couvre les lignes "process", "filesystem" et "network traffic" du tableau.
+# Le "ping" est dans heartbeat-es-os.yml.
+
+name: "${HOSTNAME}"
+
+# Techno du host (utilisée pour filesystem et network).
+# Pour les process, elle est déduite de la ligne de commande Java.
+fields:
+  monitored:
+    techno: "elasticsearch"     # ← mettre "opensearch" sur les nodes OpenSearch
+fields_under_root: false
+
+metricbeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: false
+
+metricbeat.modules:
+
+  # ------------------------------------------------------------
+  # PROCESS : count / memory usage / cpu usage
+  # ------------------------------------------------------------
+  - module: system
+    metricsets: [process]
+    period: 30s
+    processes: ['^java$']                 # ES et OpenSearch sont des JVM
+    process.cmdline.cache.enabled: true
+    process.include_top_n.enabled: false  # sinon un process peu gourmand peut disparaître
+
+    processors:
+      # 1) Garder uniquement les JVM Elasticsearch / OpenSearch
+      - drop_event:
+          when:
+            not:
+              regexp:
+                process.command_line: 'org\.elasticsearch\.bootstrap\.Elasticsearch|org\.opensearch\.bootstrap\.OpenSearch'
+
+      # 2) Étiqueter la techno
+      - add_fields:
+          when:
+            regexp:
+              process.command_line: 'org\.elasticsearch\.bootstrap\.Elasticsearch'
+          target: monitored
+          fields:
+            techno: elasticsearch
+            type: process
+      - add_fields:
+          when:
+            regexp:
+              process.command_line: 'org\.opensearch\.bootstrap\.OpenSearch'
+          target: monitored
+          fields:
+            techno: opensearch
+            type: process
+
+  # ------------------------------------------------------------
+  # FILESYSTEM : fsys size (2 points de montage)
+  # ------------------------------------------------------------
+  - module: system
+    metricsets: [filesystem]
+    period: 1m
+    processors:
+      - drop_event:
+          when:
+            not:
+              or:
+                - equals:
+                    system.filesystem.mount_point: "/DATA"   # ← adapter (findmnt -T <data path>)
+                - equals:
+                    system.filesystem.mount_point: "/"       # ← adapter (2e montage à suivre)
+      - add_fields:
+          target: monitored
+          fields:
+            type: filesystem
+
+  # ------------------------------------------------------------
+  # NETWORK TRAFFIC : in / out
+  # ------------------------------------------------------------
+  - module: system
+    metricsets: [network]
+    period: 30s
+    processors:
+      # Garder uniquement l'interface principale
+      - drop_event:
+          when:
+            not:
+              regexp:
+                system.network.name: '^(eth0|ens[0-9]+|eno[0-9]+|bond0)$'   # ← adapter
+      - add_fields:
+          target: monitored
+          fields:
+            type: network
+
+# ------------------------------------------------------------
+# OUTPUT — idéalement un cluster de monitoring SÉPARÉ
+# ------------------------------------------------------------
+output.elasticsearch:
+  hosts: ["https://monitoring-es:9200"]
+  api_key: "id:key"
+  ssl.certificate_authorities: ["/etc/metricbeat/ca.crt"]
