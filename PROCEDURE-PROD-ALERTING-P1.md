@@ -11,7 +11,7 @@ Elastic Agent (System, Logstash, Osquery, Synthetics) ──► Elasticsearch
 Chaque règle écrit un document à chaque **déclenchement** (`firing`) et à chaque **levée** (`recovered`) dans
 l'index `alerts-elklab`, avec un message lisible ; Grafana affiche ce journal. Tout se colle dans **Kibana Dev
 Tools** (une requête `kbn:` part vers l'API Kibana, les autres vers Elasticsearch) et dans Grafana.
-**Ordre** : sections 1 à 5, puis vérification (6).
+**Ordre** : sections 1 à 5, puis vérification (6). Section 8 : option cluster distant (Remote Elasticsearch).
 
 *Généré par `docs/gen_procedure.py` à partir des fichiers déployés dans le lab : ne pas modifier à la main.*
 
@@ -808,3 +808,143 @@ DELETE _security/role/grafana_reader
 ```
 
 Grafana : supprimer le dashboard et les 4 datasources. Le champ `logstash.pool` reste mappé dans les index existants.
+## 8. Option : envoyer les données vers un cluster distant (Remote Elasticsearch)
+
+Les agents restent gérés par le Fleet du **cluster de gestion** (A) ; leurs données partent vers un **cluster
+distant** (B). Avec **Synchronize integrations**, B installe automatiquement les mêmes intégrations, dans les mêmes
+versions, et les composants `@custom` (dont `logstash@custom`) : les données y arrivent avec **les mêmes champs**,
+et les règles de cette procédure s'y appliquent telles quelles.
+
+```text
+Cluster A (gestion)                                        Cluster B (distant)
+Fleet écrit la liste ─► fleet-synced-integrations ──CCR──► fleet-synced-integrations-ccr-<A>
+                                                           Fleet B lit cette copie, installe les intégrations
+Elastic Agent ─────────────── données (metrics-*, logs-*) ─► Elasticsearch B : règles, alerts-elklab, Grafana
+Kibana A ─── clé d'API (lecture seule) ──────────────────► Kibana B : état de la synchronisation
+```
+
+### 8.1 Prérequis
+
+| Élément | Requis |
+|---|---|
+| Licence | **Enterprise** sur A et B (la synchronisation repose sur la réplication inter-clusters, CCR) |
+| Versions | A et B dans la même version (9.5) |
+| Réseau | Agents → Elasticsearch B (9200) ; B → transport de A (9300, mode par certificat ; ou 9443, mode par clé d'API) ; **serveur** Kibana A → Kibana B (5601) |
+| Rôles | Nœuds de B avec `remote_cluster_client` (rôle par défaut) |
+| TLS | Certificat de B reconnu par les agents (CA renseignée dans la sortie) et, en mode par certificat, CA commune ou croisée entre A et B |
+
+### 8.2 Sur le cluster distant (B)
+
+```
+# 1. Initialiser Fleet (démarre la tâche de synchronisation, qui tourne toutes les 5 min)
+POST kbn:/api/fleet/setup
+
+# 2. IMPORTANT : la sortie Fleet par défaut de B doit porter l'adresse de B telle qu'elle est déclarée
+#    dans la sortie de A. Sinon la tâche considère que la synchronisation ne la concerne pas et ne fait
+#    rien, sans aucun message (valeur par défaut : http://localhost:9200).
+PUT kbn:/api/fleet/outputs/fleet-default-output
+{"hosts": ["https://<ES_B>:9200"]}
+
+# 3. Déclarer A comme cluster distant de B (mode par certificat, port de transport)
+PUT _cluster/settings
+{"persistent": {"cluster.remote.<NOM_A>.mode": "sniff",
+                "cluster.remote.<NOM_A>.seeds": ["<es_A_1>:9300", "<es_A_2>:9300", "<es_A_3>:9300"]}}
+
+GET _remote/info          # <NOM_A> : "connected": true
+
+# 4. Jeton de service : permet à Fleet Server de créer sur B une clé d'API par agent (écriture des données)
+POST kbn:/api/fleet/service_tokens
+{"remote": true}
+
+# 5. Clé d'API REST, en lecture seule sur Fleet : permet à Kibana A de lire l'état de la synchronisation.
+#    Clé de type REST (« Personal ») : une clé « Cross-Cluster » est refusée par l'API de Kibana.
+POST _security/api_key
+{"name": "integration_sync_api_key", "role_descriptors": {"integration_writer": {"cluster": [], "indices": [],
+  "applications": [{"application": "kibana-.kibana", "privileges": ["feature_fleet.read", "feature_fleetv2.read"], "resources": ["*"]}]}}}
+```
+
+Noter la valeur du jeton (`value`) et la clé encodée (`encoded`).
+
+### 8.3 Sur le cluster de gestion (A) : sortie Remote Elasticsearch
+
+*Fleet → Settings → Outputs → Add output*, ou :
+
+```
+POST kbn:/api/fleet/outputs
+{"id": "remote-b", "name": "Cluster distant B", "type": "remote_elasticsearch",
+ "hosts": ["https://<ES_B>:9200"],
+ "secrets": {"service_token": "<VALEUR_DU_JETON>"},
+ "ssl": {"certificate_authorities": ["<CA de B, au format PEM>"]},
+ "sync_integrations": true,
+ "kibana_url": "http://<KIBANA_B>:5601",
+ "kibana_api_key": "<CLE_ENCODEE>",
+ "is_default": false, "is_default_monitoring": false}
+```
+
+- `hosts` : l'adresse que voient **les agents**, identique à celle de l'étape 8.2-2.
+- `kibana_url` : l'adresse que voit **le serveur Kibana A** (pas le navigateur).
+- `kibana_api_key` est stockée **en clair** dans la configuration de la sortie (le jeton de service, lui, est un
+  secret) : d'où la clé en lecture seule.
+- Fleet crée alors sur A l'index `fleet-synced-integrations` (liste des intégrations à reproduire) :
+  `GET fleet-synced-integrations/_search`, **sur A**.
+
+### 8.4 Sur le cluster distant (B) : index suiveur
+
+```
+PUT fleet-synced-integrations-ccr-<NOM_A>/_ccr/follow?wait_for_active_shards=1
+{"remote_cluster": "<NOM_A>", "leader_index": "fleet-synced-integrations"}
+```
+
+Copie en lecture seule, tenue à jour en continu, de la liste de A. Le nom doit commencer par
+`fleet-synced-integrations-ccr-` et il ne doit y en avoir **qu'un seul** sur B.
+
+### 8.5 Vérification
+
+```
+# Sur A (Dev Tools du cluster de gestion) : état par intégration et par asset @custom.
+# remote-b = id de la sortie créée en 8.3. Attendu : "error": null, tous les sync_status à "completed"
+# (synchronizing = pas encore installé sur B ; failed = échec, détail dans error).
+GET kbn:/api/fleet/remote_synced_integrations/remote-b/remote_status
+
+# Sur B : intégrations installées (mêmes versions que sur A) et mapping logstash.pool
+GET kbn:/api/fleet/epm/packages/logstash
+GET _component_template/logstash@custom
+```
+
+Compter 5 à 15 minutes (tâche toutes les 5 min, installations successives). Dans *Fleet → Settings → Outputs* de A,
+la sortie affiche l'état de la synchronisation.
+
+### 8.6 Basculer les données, puis l'alerting
+
+1. Sur B, appliquer les sections **1 à 5** de cette procédure : journal `alerts-elklab`, inventaire, connecteur,
+   vue de données, packs Osquery, règles, Grafana. Ces éléments **ne sont pas synchronisés**.
+2. Sur A, pour chaque agent policy de pool : *Settings → Output for integrations* = la sortie distante, ou
+   `PUT kbn:/api/fleet/agent_policies/<id>` avec `"data_output_id": "remote-b"`. La policy de **Fleet Server**
+   garde la sortie locale.
+3. Vérifier sur B que les champs utilisés par les règles existent :
+   `GET metrics-*,logs-*/_field_caps?fields=logstash.pool,logstash.log.pipeline_id,host.name`, puis la section 6.
+
+### 8.7 Pièges rencontrés dans le lab
+
+| Symptôme | Cause et correction |
+|---|---|
+| Toutes les intégrations restent « synchronizing », rien ne s'installe sur B, aucun log | La sortie Fleet par défaut de B ne contient pas l'adresse déclarée dans la sortie de A (étape 8.2-2) |
+| « authentication expected API key type of [rest] … has type [cross_cluster] » | Clé « Cross-Cluster » au lieu d'une clé REST (« Personal ») dans `kibana_api_key` |
+| « Follower index not found » | Index suiveur absent sur B (étape 8.4), ou nom ne commençant pas par `fleet-synced-integrations-ccr-` |
+| `GET fleet-synced-integrations/_search` → index not found | Normal **sur B** : la copie s'y appelle `fleet-synced-integrations-ccr-<NOM_A>` |
+| « kibana-reporting@custom references "kibana-reporting" that might not exist… » | Avertissement de précaution : la politique ILM `kibana-reporting` est créée par chaque Kibana, elle existe déjà sur B. Rien à faire |
+| Fleet de B : `missing_requirements: fleet_server` | Normal : B ne reçoit pas d'agents directement et n'a pas besoin de Fleet Server |
+
+### 8.8 Retour arrière
+
+```
+# Sur A : remettre la sortie locale dans les policies, puis
+DELETE kbn:/api/fleet/outputs/remote-b
+# Sur B
+POST fleet-synced-integrations-ccr-<NOM_A>/_ccr/pause_follow
+POST fleet-synced-integrations-ccr-<NOM_A>/_close
+POST fleet-synced-integrations-ccr-<NOM_A>/_ccr/unfollow
+DELETE fleet-synced-integrations-ccr-<NOM_A>
+PUT _cluster/settings
+{"persistent": {"cluster.remote.<NOM_A>.mode": null, "cluster.remote.<NOM_A>.seeds": null}}
+```
