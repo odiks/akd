@@ -134,7 +134,7 @@ flowchart LR
 
 **Deux clusters, deux rôles.** Le cluster de gestion porte Fleet : il pilote les agents (policies, intégrations, mises à jour) mais ne reçoit pas leurs données. Les intégrations envoient leurs données vers une **sortie (output) de type remote Elasticsearch**, qui pointe vers le cluster de supervision. C'est sur ce cluster que sont stockées les données, créées les règles Kibana, écrit le journal des alertes et branché Grafana.
 
-- **Assets des intégrations** : index templates et ingest pipelines doivent exister sur le cluster remote. Sinon, les données arrivent avec un mapping dynamique et des messages non découpés, et les règles ou Stack Monitoring ne les lisent pas correctement. On utilise la synchronisation des intégrations de la sortie remote, ou une installation des assets dans la Kibana du remote, dans la même version que la policy Fleet.
+- **Assets des intégrations** : index templates et ingest pipelines doivent exister sur le cluster remote. Sinon, les données arrivent avec un mapping dynamique et des messages non découpés, et les règles ou Stack Monitoring ne les lisent pas correctement. On utilise la synchronisation des intégrations de la sortie remote (licence Enterprise), ou une installation des assets dans la Kibana du remote, dans la même version que la policy Fleet (voir section 13.1).
 - **Choix de la sortie** : réglé par intégration ou par agent policy dans Fleet. Toute intégration laissée sur la sortie par défaut écrit sur le cluster de gestion, et ses données échappent aux règles.
 - **Self-monitoring des agents** : [sortie remote / sortie par défaut, à préciser], selon l'endroit où l'on veut suivre l'état des agents.
 
@@ -489,7 +489,109 @@ FROM logs-osquery_manager.result-*
 
 ---
 
-## 13. Risques et points ouverts
+## 13. Problèmes rencontrés et solutions
+
+| # | Problème | Impact | Solution retenue |
+|---|---|---|---|
+| 13.1 | La synchronisation des intégrations vers le cluster remote exige une licence Enterprise | Assets absents sur le cluster de supervision : mapping dynamique, logs non découpés | Installation manuelle des assets via Dev Tools |
+| 13.2 | `host.name` ne correspond pas au nom réel de l'hôte | Alertes et dashboards difficiles à rapprocher de l'inventaire et de l'Excel Zabbix | Variable d'environnement `REAL_HOSTNAME` dans `/etc/sysconfig/elastic-agent`, recopiée dans `labels.inventory_hostname` |
+
+### 13.1 Synchronisation des intégrations : licence Enterprise
+
+**Constat**
+
+- Avec une sortie remote Elasticsearch, l'agent écrit sur le cluster de supervision, mais Fleet n'installe les assets des intégrations que sur le cluster de gestion. Les assets concernés sont les index templates, les component templates, les ingest pipelines et les politiques de cycle de vie.
+- L'option **« Synchronize integrations »** de la sortie remote recopie ces assets automatiquement. Elle s'appuie sur la réplication inter-clusters (CCR) et **nécessite une licence Enterprise**. [À COMPLÉTER : licence actuelle des clusters].
+- Sans ces assets, les data streams sont créés avec le template générique :
+  - le mapping est dynamique, et des champs numériques sont parfois indexés en texte ;
+  - les ingest pipelines ne tournent pas, donc les logs ne sont pas découpés (`message` brut) ;
+  - les règles ES|QL et Stack Monitoring ne trouvent pas les champs attendus.
+
+**Solution de contournement : ajout manuel des assets via Dev Tools**
+
+*Variante A, recommandée quand le cluster remote a sa propre Kibana* : installer le package dans la Kibana du remote avec l'API Fleet, depuis la console Dev Tools de cette Kibana. **La version doit être la même que dans la policy du cluster de gestion**, car le nom des ingest pipelines contient la version, par exemple `logs-system.syslog-3.4.0`.
+
+```
+# Dev Tools de la Kibana du cluster remote
+GET  kbn:/api/fleet/epm/packages/system            # version installée
+POST kbn:/api/fleet/epm/packages/system/3.4.0      # installe templates, pipelines, dashboards
+{ "force": true }
+```
+
+*Variante B, copie asset par asset* : lire chaque asset sur le cluster de gestion, puis le recréer à l'identique sur le remote.
+
+```
+# 1. Sur le cluster de gestion : lire les assets d'un data stream
+GET _index_template/logs-system.syslog
+GET _component_template/logs-system.syslog@package
+GET _ingest/pipeline/logs-system.syslog-3.4.0*
+
+# 2. Sur le cluster remote : recréer avec le même nom et le même contenu
+PUT _ingest/pipeline/logs-system.syslog-3.4.0
+{ ... }
+PUT _component_template/logs-system.syslog@package
+{ ... }
+PUT _index_template/logs-system.syslog
+{ ... }
+```
+
+| Ordre | Asset | Remarque |
+|---|---|---|
+| 1 | Ingest pipelines `<type>-<intégration>.<dataset>-<version>` et leurs sous-pipelines | Référencés par le `default_pipeline` du `@package` |
+| 2 | Assets globaux de Fleet : pipeline `.fleet_final_pipeline-1`, component templates `.fleet_globals-1` et `.fleet_agent_id_verification-1` | Communs à toutes les intégrations ; à créer une seule fois |
+| 3 | Component templates `<data stream>@package` et `@custom` | Les `@custom` portent les ajouts locaux, par exemple `labels.inventory_hostname` |
+| 4 | Component template global `logs@custom` | Jamais recopié, même par la synchronisation : à créer sur chaque cluster |
+| 5 | Index templates `<type>-<intégration>.<dataset>` | En dernier, car ils référencent les assets précédents |
+| 6 | Rollover des data streams déjà créés : `POST <data stream>/_rollover` | Le nouveau mapping ne s'applique qu'au prochain index |
+
+Les templates de base comme `logs@mappings`, `ecs@mappings` ou `metrics@settings` sont fournis par Elasticsearch et existent déjà sur le remote.
+
+**Points d'attention**
+
+- **Chaque montée de version d'une intégration** dans Fleet doit être rejouée sur le remote, sinon l'agent référence un pipeline qui n'existe pas. Cette étape est ajoutée à la procédure de mise à jour des intégrations.
+- **Vérification** : `GET _data_stream/<data stream>` doit indiquer le template de l'intégration (`template: logs-system.syslog`) et non `logs`. Un document récent doit avoir les champs découpés (`event.dataset`, champs propres à l'intégration).
+- **Évolution** : si une licence Enterprise est obtenue, activer « Synchronize integrations » et supprimer cette étape manuelle.
+
+### 13.2 Nom réel des hôtes (`REAL_HOSTNAME`)
+
+**Constat**
+
+- Elastic Agent renseigne `host.name` avec le nom système de la machine. Ce nom ne correspond pas toujours au nom connu dans l'inventaire et dans Zabbix : nom court ou FQDN, nom technique de VM ou de conteneur, machine clonée. [À COMPLÉTER : cas rencontrés].
+- **Conséquences** :
+  - les alertes affichent un nom que l'exploitation ne reconnaît pas ;
+  - le rapprochement avec l'Excel Zabbix est difficile ;
+  - les filtres des dashboards par hôte sont moins utiles.
+
+**Solution : variable d'environnement dans `/etc/sysconfig`**
+
+1. **Sur chaque hôte Linux**, définir le nom d'inventaire dans le fichier d'environnement du service. L'unité systemd d'Elastic Agent le lit déjà (`EnvironmentFile=-/etc/sysconfig/elastic-agent`).
+
+   ```
+   # /etc/sysconfig/elastic-agent
+   REAL_HOSTNAME=<nom d'inventaire de l'hôte>
+   ```
+
+   Redémarrer ensuite le service : `systemctl restart elastic-agent`. Ne pas modifier l'unité systemd elle-même, car elle est réécrite à la réinstallation de l'agent. Une alternative est un fichier de surcharge `/etc/systemd/system/elastic-agent.service.d/real-hostname.conf` (`Environment=REAL_HOSTNAME=…`).
+
+2. **Dans chaque agent policy**, sous *Settings → Custom fields*, ajouter :
+
+   `labels.inventory_hostname` = `${env.REAL_HOSTNAME|host.name}`
+
+   Si la variable est absente, la valeur de repli est `host.name`, et l'input reste actif.
+
+3. **Mapping** : déclarer `labels.inventory_hostname` en `keyword` dans `logs@custom` et dans les `<intégration>@custom` des métriques, **sur le cluster de supervision**. C'est indispensable pour les data streams en `dynamic: false` (Logstash, Elasticsearch, Kibana) : sans mapping, le champ est dans `_source` mais il n'est ni filtrable ni agrégeable. La prise d'effet a lieu au rollover suivant.
+
+4. **Règles et dashboards** : `host.name` reste le champ technique. `labels.inventory_hostname` est ajouté aux messages d'alerte et aux filtres des dashboards. [À COMPLÉTER : règles qui regroupent sur ce champ].
+
+**Points d'attention**
+
+- **Windows** : la variable doit être définie dans la valeur `Environment` du service `Elastic Agent`, puis le service doit être redémarré. Une variable système n'est vue par les services qu'après un redémarrage de Windows.
+- **Déploiement** : la variable doit être posée à l'installation de l'agent, par l'outil de déploiement. [À COMPLÉTER : Ansible, image, autre].
+- **Hors champ** : la variable ne s'applique pas à l'auto-surveillance de l'agent (`elastic_agent.*`).
+
+---
+
+## 14. Risques et points ouverts
 
 | Risque | Probabilité | Impact | Mesure |
 |---|---|---|---|
@@ -499,6 +601,8 @@ FROM logs-osquery_manager.result-*
 | Seuils mal calibrés (faux positifs) | Moyenne | Moyen | Double run et ajustements |
 | Indisponibilité de la plateforme Elastic | Faible | Élevé | Supervision externe de la stack ; [ ] |
 | Écart entre Kibana et le dashboard Grafana (alerte affichée ouverte à tort) | Moyenne | Moyen | Vérifier l'écriture des levées dans le journal ; panneau de santé des règles ; taille des requêtes Grafana |
+| Assets non recopiés sur le remote après une montée de version d'intégration | Moyenne | Élevé | Étape obligatoire de la procédure de mise à jour (section 13.1) ; licence Enterprise à terme |
+| `REAL_HOSTNAME` absent sur un nouvel hôte | Moyenne | Faible | Repli sur `host.name` ; variable posée par l'outil de déploiement (section 13.2) |
 | Montée en compétence des équipes | [ ] | [ ] | Formation, runbooks |
 
 **Points ouverts**
