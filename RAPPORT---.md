@@ -208,7 +208,92 @@ Les datasources utilisent un compte technique en **lecture seule**, limité à c
 - Les requêtes Grafana renvoient un nombre limité de documents (taille de la requête). Le dimensionner selon le volume du journal, sinon le dernier événement d'une alerte peut manquer.
 - Chaque règle doit se terminer par un regroupement explicite (`STATS … BY`) sur la clé de l'alerte, pour que `alert_id` soit stable et unique.
 
-**Conventions**
+### 5.2 Alertes basées sur Osquery
+
+**Osquery remplace les contrôles Zabbix du type « process présent » et « port en écoute ».** Elastic Agent embarque Osquery, qui interroge l'état du système en SQL (tables `processes`, `listening_ports`…). Des requêtes planifiées tournent sur chaque hôte, et des règles Kibana analysent leurs résultats.
+
+```mermaid
+flowchart LR
+  subgraph KM[Cluster de gestion : Kibana Fleet]
+    P[Pack Osquery<br/>requêtes SQL + intervalle]
+    POL[Agent policy<br/>ex. logstash-pool1]
+  end
+
+  subgraph H[Chaque hôte de la policy]
+    EA[Elastic Agent]
+    OQ[osqueryd]
+    EA --> OQ
+  end
+
+  subgraph R[Cluster de supervision remote]
+    DS[(logs-osquery_manager.result-*)]
+    RK[Règle Kibana ES#124;QL<br/>toutes les 1 min]
+    J[(Journal des alertes)]
+  end
+
+  P -->|assigné à| POL
+  POL -->|policy distribuée| EA
+  OQ -->|snapshot toutes les 60-120 s<br/>output remote| DS
+  DS --> RK
+  RK -->|port fermé / process absent| J
+  RK -.->|plus aucun snapshot| J
+```
+
+**Fonctionnement**
+
+1. **Pack** : un ensemble de requêtes SQL, avec leur intervalle, défini dans Kibana Fleet et assigné à une ou plusieurs agent policies. Chaque hôte de la policy l'exécute ; un nouvel hôte enrôlé dans la policy est couvert automatiquement.
+2. **Mode snapshot** : à chaque exécution, la requête renvoie **l'état complet** (toutes les lignes), et pas seulement les changements. On a donc un résultat à chaque intervalle, y compris quand tout va bien.
+3. **Une ligne toujours renvoyée** : les requêtes sont écrites pour renvoyer une ligne même quand l'objet surveillé est absent. Un process arrêté donne `running = 0` ; un port fermé donne `listening = 0`. L'absence est donc un signal explicite, distinct d'une absence de données.
+4. **Envoi** : les résultats vont directement de l'agent vers le cluster de supervision, dans `logs-osquery_manager.result-*`. Ce chemin de données est indépendant du canal de contrôle Fleet : un agent marqué « offline » dans Fleet continue d'envoyer ses snapshots tant que son process tourne.
+5. **Règle Kibana** : toutes les minutes, une requête ES|QL prend le **dernier résultat de chaque hôte et de chaque objet** (`LAST(…, @timestamp)` ou `INLINE STATS`), et lève une alerte quand ce résultat vaut 0.
+
+**Exemple : port d'input fermé sur un nœud Logstash**
+
+Requête Osquery (pack du pool, exécutée toutes les 120 s) : liste des ports attendus du pool, avec pour chacun `listening = 1` si un process Logstash l'écoute, `0` sinon.
+
+Résultat d'un snapshot :
+
+| host.name | pipeline | port | listening | logstash_running |
+|---|---|---|---|---|
+| srv-ls-01 | syslog_in | tcp/5514 | 1 | 1 |
+| srv-ls-01 | syslog_in | udp/5514 | 0 | 1 |
+
+Règle Kibana :
+
+```esql
+FROM logs-osquery_manager.result-*
+| WHERE query_name LIKE "logstash_ports_*"
+| EVAL port = CONCAT(network.transport, "/", TO_STRING(server.port))
+| STATS listening        = LAST(osquery.listening, @timestamp),
+        logstash_running = LAST(osquery.logstash_running, @timestamp),
+        last_snapshot    = MAX(@timestamp)
+    BY host.name, logstash.pipeline.name, port
+| WHERE listening == 0 AND logstash_running > 0
+| KEEP host.name, logstash.pipeline.name, port, last_snapshot
+```
+
+- **Une alerte par hôte × pipeline × port** : le dernier `STATS … BY` définit l'identifiant de l'alerte (`srv-ls-01,syslog_in,udp/5514`).
+- **`logstash_running > 0`** : si Logstash est arrêté, c'est la règle « process absent » qui alerte, pas une alerte par port.
+- **Délai d'alerte** : l'alerte n'est levée qu'après [3] exécutions consécutives en défaut, pour absorber un redémarrage de pipeline.
+
+**Règles Osquery en place**
+
+| Règle | Requête Osquery | Détecte | Priorité |
+|---|---|---|---|
+| Process absent (Logstash, Elasticsearch, Kibana…) | `process_<composant>`, toutes les 60 s | `running = 0` sur les derniers snapshots | P1 |
+| Port d'input fermé | `logstash_ports_<pool>`, toutes les 120 s | `listening = 0` alors que Logstash tourne | P2 |
+| Snapshots manquants | toutes les requêtes `process_*` | Aucun résultat d'un hôte depuis [5] min | P2 |
+
+**Supervision de la supervision.** Si l'agent ou Osquery s'arrête, il n'y a plus de snapshot, donc plus de `0` à détecter. La règle « snapshots manquants » couvre ce cas : elle alerte quand un hôte ne renvoie plus de résultat.
+
+**Coût** : une requête locale par hôte et par intervalle, quelques lignes par exécution. Pour 200 hôtes et 5 ports chacun toutes les 120 s, environ 8 documents par seconde, sans flux réseau supplémentaire vers les hôtes.
+
+**Limites**
+
+- Osquery prouve qu'un port **écoute** localement, pas qu'il est **joignable** depuis le réseau. Le contrôle de joignabilité (firewall, load balancer) reste confié à Synthetics, sur l'adresse d'entrée du pool.
+- La liste des ports attendus est maintenue dans le pack de chaque pool : un nouveau pipeline demande d'y ajouter une ligne.
+
+### 5.3 Conventions
 
 - **Nommage des règles** : `[Priorité] Composant – symptôme (source)`, par exemple `[P1] Logstash – process not running (Osquery)`.
 - **Tags** : environnement, priorité, composant, source.
