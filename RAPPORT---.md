@@ -283,6 +283,7 @@ FROM logs-osquery_manager.result-*
 | Process absent (Logstash, Elasticsearch, Kibana…) | `process_<composant>`, toutes les 60 s | `running = 0` sur les derniers snapshots | P1 |
 | Port d'input fermé | `logstash_ports_<pool>`, toutes les 120 s | `listening = 0` alors que Logstash tourne | P2 |
 | Snapshots manquants | toutes les requêtes `process_*` | Aucun résultat d'un hôte depuis [5] min | P2 |
+| Santé des pipelines (hors Osquery, voir ci-dessous) | `metrics-logstash.health_report-*` | `status` `red` ou `yellow` | P1 / P2 |
 
 **Supervision de la supervision.** Si l'agent ou Osquery s'arrête, il n'y a plus de snapshot, donc plus de `0` à détecter. La règle « snapshots manquants » couvre ce cas : elle alerte quand un hôte ne renvoie plus de résultat.
 
@@ -292,6 +293,63 @@ FROM logs-osquery_manager.result-*
 
 - Osquery prouve qu'un port **écoute** localement, pas qu'il est **joignable** depuis le réseau. Le contrôle de joignabilité (firewall, load balancer) reste confié à Synthetics, sur l'adresse d'entrée du pool.
 - La liste des ports attendus est maintenue dans le pack de chaque pool : un nouveau pipeline demande d'y ajouter une ligne.
+
+**Alternative : santé des pipelines par le health report de Logstash**
+
+Au lieu de vérifier qu'un port écoute, on peut contrôler directement **l'état de chaque pipeline**. Depuis la version 8.16, Logstash expose l'API `GET _health_report` sur son port de monitoring (9600). L'intégration Logstash d'Elastic Agent la collecte dans le data stream `metrics-logstash.health_report-*`, avec un document par nœud et par pipeline à chaque collecte.
+
+| Champ | Contenu | Exemple |
+|---|---|---|
+| `logstash.node.name` | Nœud Logstash | `srv-ls-01` |
+| `logstash.pipeline.id` | Pipeline | `pool1-syslog_in` |
+| `logstash.pipeline.status` | Santé : `green`, `yellow`, `red` | `yellow` |
+| `logstash.pipeline.state` | État : `RUNNING`, `LOADING`, `FINISHED`, `TERMINATED`… | `LOADING` |
+| `logstash.pipeline.symptom` | Résumé lisible | `The pipeline is concerning; 1 area is impacted…` |
+| `logstash.pipeline.diagnosis.cause` / `.action` / `.help_url` | Cause, action conseillée, lien vers la documentation | `pipeline is loading` |
+| `logstash.pipeline.impacts.*` | Zone impactée et sévérité | `pipeline_execution`, 1 |
+| `logstash.pipeline.flow.worker_utilization.*` | Taux d'occupation des workers (1 min, 5 min, 15 min…) | `0.99` |
+
+Le health report combine deux contrôles :
+- **l'état du pipeline**, par exemple arrêté, terminé ou bloqué au chargement ;
+- **la saturation des workers**, qui signale un pipeline qui n'arrive plus à suivre le débit.
+
+Règle Kibana (testée sur le lab) :
+
+```esql
+FROM metrics-logstash.health_report-*
+| WHERE logstash.pipeline.id IS NOT NULL
+| STATS status      = LAST(logstash.pipeline.status, @timestamp),
+        state       = LAST(logstash.pipeline.state, @timestamp),
+        symptom     = LAST(logstash.pipeline.symptom, @timestamp),
+        cause       = LAST(logstash.pipeline.diagnosis.cause, @timestamp),
+        last_report = MAX(@timestamp)
+    BY logstash.node.name, logstash.pipeline.id
+| WHERE status != "green"
+| EVAL priority = CASE(status == "red", "P1", "P2")
+| KEEP logstash.node.name, logstash.pipeline.id, priority, status, state, symptom, cause, last_report
+```
+
+- **Une alerte par nœud × pipeline.** `red` donne P1 ; `yellow` donne P2.
+- **Délai d'alerte de [3] exécutions** : un pipeline passe brièvement en `yellow` / `LOADING` à chaque redémarrage ou rechargement de configuration.
+- **Champ d'hôte** : ce data stream est en `dynamic: false` et `host.name` n'y est pas mappé. La règle utilise donc `logstash.node.name`, ou `labels.inventory_hostname` une fois mappé (section 13.2).
+- **Message d'alerte** : `symptom`, `cause` et `help_url` donnent directement le diagnostic, sans aller lire les logs Logstash.
+
+**Comparaison avec le contrôle des ports par Osquery**
+
+| | Health report (`metrics-logstash.health_report`) | Ports Osquery (`listening_ports`) |
+|---|---|---|
+| Ce qui est vérifié | Le pipeline tourne et traite les événements | Le port est en écoute sur l'hôte |
+| Liste à maintenir | Aucune : tout pipeline déclaré est couvert automatiquement | Liste des ports attendus par pool |
+| Diagnostic | Cause, action conseillée, lien vers la documentation | Port fermé, sans cause |
+| Saturation, pipeline bloqué | ✅ (worker utilization, état) | ❌ |
+| Pipelines sans input réseau (beats, fichiers, Kafka…) | ✅ | ❌ |
+| Logstash arrêté | ❌ L'API ne répond plus : pas de document de pipeline, seulement des erreurs de collecte | ✅ `logstash_running = 0` |
+| Prérequis | Logstash ≥ 8.16, intégration Logstash avec le data stream health report | Pack Osquery |
+
+**Recommandation** :
+- **Health report comme contrôle principal** de l'état des pipelines. Il ne demande aucune liste à maintenir et donne un meilleur diagnostic.
+- **Garder la règle « process absent »** et une règle « collecte en erreur » (documents avec `error.message`, par exemple `connection refused` sur le port 9600), pour couvrir Logstash arrêté.
+- **Contrôle de port Osquery ou Synthetics seulement pour les inputs critiques.** Un port déjà pris par un autre process, ou un input qui n'arrive pas à se lier, n'est pas forcément vu comme `red` par le health report. [À COMPLÉTER : résultat du test « port occupé »].
 
 ### 5.3 Conventions
 
